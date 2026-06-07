@@ -11,6 +11,6 @@ export const config = {
     // Always run for API routes
     '/(api|trpc)(.*)',
   ],
-  runtime: 'edge', // This forces Next.js to use the Edge runtime compatible with Cloudflare
+  runtime: 'experimental-edge', // This forces Next.js to use the Edge runtime compatible with Cloudflare
 
 };
