@@ -29,7 +29,7 @@ export default function RootLayout({
         <ClerkProvider>
           <header className="flex justify-between items-center p-4 gap-4 h-16">
               <h1 className="text-xl uppercase tracking-[0.25em] text-[#8f6d3d] dark:text-[#c4a06d] font-semibold mb-4">
-                Backstage chat with.me
+                Backstage Chat.me
               </h1>
             <div>
             <Show when="signed-out">

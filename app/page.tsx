@@ -269,7 +269,7 @@ export default function Home() {
       {/* Footer Section */}
       <footer className="w-full bg-[#FAF8F5] dark:bg-[#070707] py-12 px-6 border-t border-stone-200/30 dark:border-stone-900/30 flex flex-col items-center justify-center">
         <div className="font-serif tracking-[0.2em] text-[#8f6d3d] dark:text-[#c4a06d] text-xs font-semibold mb-6">
-          BACKSTAGE CHAT WITH.ME
+          BACKSTAGE CHAT.ME
         </div>
         <div className="flex gap-6 text-xs text-stone-500 dark:text-stone-400 mb-8">
           <a href="#" className="hover:text-stone-800 dark:hover:text-stone-100">Terms of Service</a>
