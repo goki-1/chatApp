@@ -27,6 +27,9 @@ export function getBotResponse(userInput: string): BotResponse {
     text = "Hey! Wonderful to connect with you. How is your day going? What are you working on or excited about right now?";
     delayMs = 1000;
   }
+  else {
+    text = "Boli chal mainu kehra kuch samajh aunda..."
+  }
 
   return { text, delayMs };
 }

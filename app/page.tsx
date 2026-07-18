@@ -1,8 +1,8 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
-import { useAuth, useUser, useClerk, SignUpButton, SignInButton } from "@clerk/nextjs";
-import { getBotResponse } from "./chatLogic";
+import { useAuth, useUser, useClerk } from "@clerk/nextjs";
+import { syncUser, getMessages, sendMessageAction } from "@/lib/actions";
 
 interface Message {
   id: string;
@@ -30,6 +30,13 @@ export default function Home() {
   ]);
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
+
+  // Database states
+  const [userDbId, setUserDbId] = useState<number | null>(null);
+  const [credits, setCredits] = useState<number | null>(null);
+  const [currentConversationType, setCurrentConversationType] = useState<string | null>(null);
+  const [creditsError, setCreditsError] = useState<string | null>(null);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Scroll to bottom on new messages
@@ -51,11 +58,54 @@ export default function Home() {
           text: pendingMsg,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         };
-        
         setMessages(prev => [...prev, newMsg]);
       }
     }
   }, [authLoaded, userId]);
+
+  // Sync authenticated Clerk user to Supabase
+  useEffect(() => {
+    if (authLoaded && userId && userLoaded && user) {
+      syncUser()
+        .then((res) => {
+          if (res.success && res.user) {
+            setUserDbId(res.user.id);
+            setCredits(res.user.credits);
+            setCurrentConversationType(res.user.current_conversation_type);
+          } else {
+            console.error("Failed to sync user to Supabase:", res.error);
+          }
+        })
+        .catch((err) => {
+          console.error("Error invoking syncUser server action:", err);
+        });
+    }
+  }, [authLoaded, userId, userLoaded, user]);
+
+  // Load messages once we have the database user ID
+  useEffect(() => {
+    if (userDbId) {
+      getMessages(userDbId)
+        .then((res) => {
+          if (res.success && res.messages) {
+            const formatted: Message[] = res.messages.map((m: any) => ({
+              id: String(m.id),
+              sender: (m.sender_type === "user" ? "user" : "Harnoor") as "user" | "Harnoor",
+              text: m.message_text,
+              timestamp: new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            }));
+            if (formatted.length > 0) {
+              setMessages(formatted);
+            }
+          } else {
+            console.error("Failed to load messages:", res.error);
+          }
+        })
+        .catch((err) => {
+          console.error("Error fetching message history:", err);
+        });
+    }
+  }, [userDbId]);
 
   // Handle landing page form submit (signed out)
   const handleLandingSubmit = (e: React.FormEvent) => {
@@ -68,39 +118,64 @@ export default function Home() {
   };
 
   // Handle message window form submit (signed in)
-  const handleSend = (e: React.FormEvent) => {
+  const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim() || !userId) return;
+    if (!input.trim() || !userDbId) return;
 
-    const userMsgId = Date.now().toString();
-    const newMsg: Message = {
-      id: userMsgId,
+    // Check credits before sending
+    if (credits !== null && credits <= 0) {
+      setCreditsError("You have 0 credits. Message sending is blocked!");
+      return;
+    }
+    setCreditsError(null);
+
+    const userText = input;
+    setInput("");
+
+    // Optimistically update the UI with user's message
+    const tempUserMsgId = "temp-" + Date.now();
+    const userMsg: Message = {
+      id: tempUserMsgId,
       sender: "user",
-      text: input,
+      text: userText,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
-
-    setMessages(prev => [...prev, newMsg]);
-    const currentInput = input;
-    setInput("");
+    setMessages((prev) => [...prev, userMsg]);
     setIsTyping(true);
 
-    // Get response and timing from external chatLogic configuration
-    const { text, delayMs } = getBotResponse(currentInput);
-
-    setTimeout(() => {
-      setIsTyping(false);
-      const replyMsgId = (Date.now() + 1).toString();
-      setMessages(prev => [
-        ...prev,
-        {
-          id: replyMsgId,
-          sender: "Harnoor",
-          text: text,
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    try {
+      const res = await sendMessageAction(userDbId, userText);
+      if (res.success) {
+        // Update credits state
+        if (res.updatedCredits !== undefined) {
+          setCredits(res.updatedCredits);
         }
-      ]);
-    }, delayMs);
+
+        // Simulate typing delay for bot response
+        setTimeout(() => {
+          setIsTyping(false);
+          const replyMsgId = "reply-" + Date.now();
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: replyMsgId,
+              sender: "Harnoor",
+              text: res.botReply || "",
+              timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            },
+          ]);
+        }, res.delayMs || 1500);
+      } else {
+        setIsTyping(false);
+        setCreditsError(res.error || "Failed to send message");
+        // Remove optimistic user message if it failed
+        setMessages((prev) => prev.filter((m) => m.id !== tempUserMsgId));
+      }
+    } catch (err: any) {
+      setIsTyping(false);
+      setCreditsError(err.message || "Failed to send message");
+      setMessages((prev) => prev.filter((m) => m.id !== tempUserMsgId));
+    }
   };
 
   // Check if we should render the signed-in Message Window directly
@@ -108,7 +183,10 @@ export default function Home() {
 
   if (showMessageWindowDirectly) {
     return (
-      <main className="w-full h-[calc(100vh-4rem)] bg-[#FAF8F5] text-stone-900 dark:bg-[#070707] dark:text-stone-100 flex flex-col">
+      <main
+        className="w-full h-[calc(100vh-4rem)] bg-[#FAF8F5] text-stone-900 dark:bg-[#070707] dark:text-stone-100 flex flex-col"
+        data-conversation-type={currentConversationType ?? undefined}
+      >
         {/* Full Screen Chat Sandbox / Message Window */}
         <div className="relative w-full h-full bg-white dark:bg-[#0f0f0f] flex flex-col justify-between">
           {/* Contact Status Bar */}
@@ -123,6 +201,12 @@ export default function Home() {
                 <span className="font-semibold text-sm tracking-wide text-stone-950 dark:text-stone-50">Harnoor V.</span>
                 <span className="text-[10px] text-[#8f6d3d] font-semibold tracking-wider uppercase">Online hour ago</span>
               </div>
+            </div>
+            <div className="flex flex-col items-end">
+              <span className="text-[10px] text-stone-400 dark:text-stone-500 uppercase tracking-widest font-semibold">Credits</span>
+              <span className={`text-sm font-semibold tracking-wide ${credits !== null && credits > 0 ? "text-[#8f6d3d]" : "text-red-500 animate-pulse"}`}>
+                {credits !== null ? credits : "..."}
+              </span>
             </div>
           </div>
 
@@ -164,6 +248,11 @@ export default function Home() {
 
           {/* Active Message Input Form */}
           <form onSubmit={handleSend} className="p-6 border-t border-stone-100 dark:border-stone-900 bg-white dark:bg-[#0f0f0f]">
+            {creditsError && (
+              <div className="mb-3 text-xs text-red-600 dark:text-red-400 font-semibold px-4 py-2 bg-red-50 dark:bg-red-950/20 border border-red-200/50 dark:border-red-900/30 rounded-2xl text-center">
+                {creditsError}
+              </div>
+            )}
             <div className="flex items-center bg-stone-50 dark:bg-stone-950 rounded-full px-4 py-2 border border-stone-200 dark:border-stone-900">
               <input
                 type="text"
