@@ -1,8 +1,21 @@
-import { createClient } from "@supabase/supabase-js";
+import { createClient, SupabaseClient } from "@supabase/supabase-js";
 
-// This admin client runs on the server and bypasses Row Level Security (RLS) policies.
-// It must only be used in secure server contexts like API routes or Server Actions.
-export const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+let clientInstance: SupabaseClient | null = null;
+
+// Lazy getter function for Supabase Admin client
+export function getSupabaseAdmin(): SupabaseClient {
+  if (!clientInstance) {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "https://api.backstagechat.me";
+    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "dummy_key_for_build";
+    clientInstance = createClient(supabaseUrl, serviceRoleKey);
+  }
+  return clientInstance;
+}
+
+export const supabaseAdmin = new Proxy({} as SupabaseClient, {
+  get(_target, prop) {
+    const client = getSupabaseAdmin();
+    const value = (client as any)[prop];
+    return typeof value === "function" ? value.bind(client) : value;
+  },
+});

@@ -2,6 +2,8 @@ import { headers } from "next/headers";
 import Stripe from "stripe";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
+export const dynamic = "force-dynamic";
+
 export async function POST(req: Request) {
   const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
@@ -43,7 +45,7 @@ export async function POST(req: Request) {
 
       if (!isNaN(userDbId) && !isNaN(creditsToBuy) && creditsToBuy > 0) {
         // Fetch current credits for the user
-        const { data: user, error: userError } = await supabaseAdmin
+        const { data: user, error: userError } = await (supabaseAdmin as any)
           .from("users")
           .select("credits")
           .eq("id", userDbId)
@@ -60,7 +62,7 @@ export async function POST(req: Request) {
         const customerId = typeof session.customer === "string" ? session.customer : session.customer?.id || null;
 
         // Update user credits and stripe_customer_id in Supabase
-        const { error: updateError } = await supabaseAdmin
+        const { error: updateError } = await (supabaseAdmin as any)
           .from("users")
           .update({
             credits: updatedCredits,
