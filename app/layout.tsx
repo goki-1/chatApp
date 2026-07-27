@@ -27,26 +27,26 @@ export default function RootLayout({
     <html lang="en">
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
         <ClerkProvider>
-          <header className="flex justify-between items-center p-4 gap-4 h-16">
-              <h1 className="text-xl uppercase tracking-[0.25em] text-[#8f6d3d] dark:text-[#c4a06d] font-semibold mb-4">
-                Backstage Chat.me
-              </h1>
-            <div>
-            <Show when="signed-out">
-              <SignInButton>
-                <button className="border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-900 text-zinc-900 dark:text-zinc-100 rounded-full font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 cursor-pointer">
-                  Sign In
-                </button>
-              </SignInButton>
-              <SignUpButton>
-                <button className="bg-purple-700 hover:bg-purple-800 text-white rounded-full font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 transition-all duration-200 active:scale-95 cursor-pointer shadow-sm hover:shadow-md">
-                  Sign Up
-                </button>
-              </SignUpButton>
-            </Show>
-            <Show when="signed-in">
-              <UserButton />
-            </Show>
+          <header className="flex flex-wrap sm:flex-nowrap justify-between items-center px-4 pt-6 pb-3 sm:py-4 sm:px-6 gap-3 sm:gap-4 border-b border-stone-200/40 dark:border-stone-900/40 bg-white/60 dark:bg-black/60 backdrop-blur-md sticky top-0 z-40">
+            <h1 className="text-base sm:text-xl uppercase tracking-[0.18em] sm:tracking-[0.25em] text-[#8f6d3d] dark:text-[#c4a06d] font-semibold shrink-0">
+              Backstage Chat.me
+            </h1>
+            <div className="flex items-center gap-2 sm:gap-3">
+              <Show when="signed-out">
+                <SignInButton>
+                  <button className="border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-900 text-zinc-900 dark:text-zinc-100 rounded-full font-medium text-xs sm:text-sm h-9 sm:h-10 px-3.5 sm:px-4 cursor-pointer whitespace-nowrap">
+                    Sign In
+                  </button>
+                </SignInButton>
+                <SignUpButton>
+                  <button className="bg-[#8f6d3d] hover:bg-[#7a5c32] text-white rounded-full font-medium text-xs sm:text-sm h-9 sm:h-10 px-3.5 sm:px-4 transition-all duration-200 active:scale-95 cursor-pointer shadow-sm hover:shadow-md whitespace-nowrap">
+                    Sign Up
+                  </button>
+                </SignUpButton>
+              </Show>
+              <Show when="signed-in">
+                <UserButton />
+              </Show>
             </div>
           </header>
           {children}

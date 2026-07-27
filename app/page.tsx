@@ -1,67 +1,25 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect } from "react";
+import Link from "next/link";
 import { useAuth, useUser, useClerk } from "@clerk/nextjs";
-import { syncUser, getMessages, sendMessageAction } from "@/lib/actions";
-
-interface Message {
-  id: string;
-  sender: "Harnoor" | "user";
-  text: string;
-  timestamp: string;
-}
+import { syncUser, createCheckoutSession } from "@/lib/actions";
+import { CreditModal } from "@/components/CreditModal";
 
 export default function Home() {
   const { isLoaded: authLoaded, userId } = useAuth();
   const { isLoaded: userLoaded, user } = useUser();
   const clerk = useClerk();
 
-  // Landing page guest input state
-  const [landingInput, setLandingInput] = useState("");
-
-  // Authenticated chat state
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: "1",
-      sender: "Harnoor",
-      text: "Hi Tell me something about yourself?",
-      timestamp: "",
-    },
-  ]);
-  const [input, setInput] = useState("");
-  const [isTyping, setIsTyping] = useState(false);
-
   // Database states
   const [userDbId, setUserDbId] = useState<number | null>(null);
   const [credits, setCredits] = useState<number | null>(null);
-  const [currentConversationType, setCurrentConversationType] = useState<string | null>(null);
+
+  // Stripe Payment & Refill Modal states
+  const [isCreditModalOpen, setIsCreditModalOpen] = useState(false);
+  const [isCheckoutLoading, setIsCheckoutLoading] = useState(false);
+  const [paymentNotice, setPaymentNotice] = useState<string | null>(null);
   const [creditsError, setCreditsError] = useState<string | null>(null);
-
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-
-  // Scroll to bottom on new messages
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, isTyping]);
-
-  // Handle post-signup/signin pending message recovery
-  useEffect(() => {
-    if (authLoaded && userId) {
-      const pendingMsg = localStorage.getItem("backstage_pending_msg");
-      if (pendingMsg) {
-        localStorage.removeItem("backstage_pending_msg");
-        // Append user message
-        const userMsgId = Date.now().toString();
-        const newMsg: Message = {
-          id: userMsgId,
-          sender: "user",
-          text: pendingMsg,
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        };
-        setMessages(prev => [...prev, newMsg]);
-      }
-    }
-  }, [authLoaded, userId]);
 
   // Sync authenticated Clerk user to Supabase
   useEffect(() => {
@@ -71,7 +29,6 @@ export default function Home() {
           if (res.success && res.user) {
             setUserDbId(res.user.id);
             setCredits(res.user.credits);
-            setCurrentConversationType(res.user.current_conversation_type);
           } else {
             console.error("Failed to sync user to Supabase:", res.error);
           }
@@ -82,294 +39,275 @@ export default function Home() {
     }
   }, [authLoaded, userId, userLoaded, user]);
 
-  // Load messages once we have the database user ID
+  // Handle Stripe Payment redirect status
   useEffect(() => {
-    if (userDbId) {
-      getMessages(userDbId)
-        .then((res) => {
-          if (res.success && res.messages) {
-            const formatted: Message[] = res.messages.map((m: any) => ({
-              id: String(m.id),
-              sender: (m.sender_type === "user" ? "user" : "Harnoor") as "user" | "Harnoor",
-              text: m.message_text,
-              timestamp: new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            }));
-            if (formatted.length > 0) {
-              setMessages(formatted);
+    if (typeof window !== "undefined") {
+      const urlParams = new URLSearchParams(window.location.search);
+      const paymentStatus = urlParams.get("payment");
+
+      if (paymentStatus === "success") {
+        setPaymentNotice("Payment successful! Your credits have been updated.");
+        const newUrl = window.location.pathname;
+        window.history.replaceState({}, "", newUrl);
+        if (authLoaded && userId && userLoaded && user) {
+          syncUser().then((res) => {
+            if (res.success && res.user) {
+              setCredits(res.user.credits);
             }
-          } else {
-            console.error("Failed to load messages:", res.error);
-          }
-        })
-        .catch((err) => {
-          console.error("Error fetching message history:", err);
-        });
-    }
-  }, [userDbId]);
-
-  // Handle landing page form submit (signed out)
-  const handleLandingSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!landingInput.trim()) return;
-
-    // Save pending message and launch Clerk sign in modal directly
-    localStorage.setItem("backstage_pending_msg", landingInput);
-    clerk.openSignIn();
-  };
-
-  // Handle message window form submit (signed in)
-  const handleSend = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!input.trim() || !userDbId) return;
-
-    // Check credits before sending
-    if (credits !== null && credits <= 0) {
-      setCreditsError("You have 0 credits. Message sending is blocked!");
-      return;
-    }
-    setCreditsError(null);
-
-    const userText = input;
-    setInput("");
-
-    // Optimistically update the UI with user's message
-    const tempUserMsgId = "temp-" + Date.now();
-    const userMsg: Message = {
-      id: tempUserMsgId,
-      sender: "user",
-      text: userText,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    };
-    setMessages((prev) => [...prev, userMsg]);
-    setIsTyping(true);
-
-    try {
-      const res = await sendMessageAction(userDbId, userText);
-      if (res.success) {
-        // Update credits state
-        if (res.updatedCredits !== undefined) {
-          setCredits(res.updatedCredits);
+          });
         }
+      } else if (paymentStatus === "cancelled") {
+        setPaymentNotice("Payment was cancelled.");
+        const newUrl = window.location.pathname;
+        window.history.replaceState({}, "", newUrl);
+      }
+    }
+  }, [authLoaded, userId, userLoaded, user]);
 
-        // Simulate typing delay for bot response
-        setTimeout(() => {
-          setIsTyping(false);
-          const replyMsgId = "reply-" + Date.now();
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: replyMsgId,
-              sender: "Harnoor",
-              text: res.botReply || "",
-              timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            },
-          ]);
-        }, res.delayMs || 1500);
+  const handleCheckout = async (creditsTier: 50 | 100 | 200, currencyCode: string = "cad") => {
+    if (!userDbId) return;
+    setIsCheckoutLoading(true);
+    try {
+      const res = await createCheckoutSession(userDbId, creditsTier, window.location.origin, currencyCode);
+      if (res.success && res.url) {
+        window.location.href = res.url;
       } else {
-        setIsTyping(false);
-        setCreditsError(res.error || "Failed to send message");
-        // Remove optimistic user message if it failed
-        setMessages((prev) => prev.filter((m) => m.id !== tempUserMsgId));
+        setCreditsError(res.error || "Failed to initiate Stripe checkout");
+        setIsCheckoutLoading(false);
       }
     } catch (err: any) {
-      setIsTyping(false);
-      setCreditsError(err.message || "Failed to send message");
-      setMessages((prev) => prev.filter((m) => m.id !== tempUserMsgId));
+      setCreditsError(err.message || "Checkout error occurred");
+      setIsCheckoutLoading(false);
     }
   };
 
-  // Check if we should render the signed-in Message Window directly
-  const showMessageWindowDirectly = authLoaded && userId;
-
-  if (showMessageWindowDirectly) {
-    return (
-      <main
-        className="w-full h-[calc(100vh-4rem)] bg-[#FAF8F5] text-stone-900 dark:bg-[#070707] dark:text-stone-100 flex flex-col"
-        data-conversation-type={currentConversationType ?? undefined}
-      >
-        {/* Full Screen Chat Sandbox / Message Window */}
-        <div className="relative w-full h-full bg-white dark:bg-[#0f0f0f] flex flex-col justify-between">
-          {/* Contact Status Bar */}
-          <div className="flex justify-between items-center px-6 py-4 border-b border-stone-100 dark:border-stone-900 bg-stone-50/20 dark:bg-black/20">
-            <div className="flex items-center gap-3">
-              <div className="relative w-10 h-10 rounded-full overflow-hidden border border-stone-200 dark:border-stone-850">
-                <div className="w-full h-full bg-[#8f6d3d]/10 text-[#8f6d3d] flex items-center justify-center font-semibold text-sm">
-                  HV
-                </div>
-              </div>
-              <div className="flex flex-col text-left">
-                <span className="font-semibold text-sm tracking-wide text-stone-950 dark:text-stone-50">Harnoor V.</span>
-                <span className="text-[10px] text-[#8f6d3d] font-semibold tracking-wider uppercase">Online hour ago</span>
-              </div>
-            </div>
-            <div className="flex flex-col items-end">
-              <span className="text-[10px] text-stone-400 dark:text-stone-500 uppercase tracking-widest font-semibold">Credits</span>
-              <span className={`text-sm font-semibold tracking-wide ${credits !== null && credits > 0 ? "text-[#8f6d3d]" : "text-red-500 animate-pulse"}`}>
-                {credits !== null ? credits : "..."}
-              </span>
-            </div>
+  return (
+    <main className="w-full min-h-[calc(100vh-4rem)] bg-[#FAF8F5] text-stone-900 dark:bg-[#070707] dark:text-stone-100 px-4 py-8 sm:px-8 sm:py-12 flex flex-col items-center">
+      <div className="max-w-5xl w-full space-y-12">
+        {/* Payment Notice Banner */}
+        {paymentNotice && (
+          <div className="w-full text-sm text-emerald-700 dark:text-emerald-300 font-medium px-5 py-3 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900/40 rounded-2xl flex justify-between items-center shadow-sm">
+            <span>{paymentNotice}</span>
+            <button onClick={() => setPaymentNotice(null)} className="text-emerald-500 hover:text-emerald-700 ml-2">✕</button>
           </div>
+        )}
 
-          {/* Message List - Full Screen Height */}
-          <div className="flex-1 overflow-y-auto py-6 px-6 space-y-4">
-            {messages.map((msg) => (
-              <div
-                key={msg.id}
-                className={`flex flex-col ${
-                  msg.sender === "user" ? "items-end" : "items-start"
-                } space-y-1`}
-              >
-                <div
-                  className={`px-4 py-3 rounded-2xl max-w-[70%] text-sm shadow-sm leading-relaxed text-left ${
-                    msg.sender === "user"
-                      ? "bg-[#8f6d3d] text-white rounded-tr-sm"
-                      : "bg-stone-100 text-stone-900 dark:bg-stone-900 dark:text-stone-100 rounded-tl-sm"
-                  }`}
-                >
-                  {msg.text}
-                </div>
-                <span className="text-[9px] text-stone-400 px-1 uppercase tracking-wider">
-                  {msg.timestamp}
+        {/* Hero Section */}
+        <section className="text-center space-y-4 pt-4">
+          <span className="text-xs uppercase tracking-[0.3em] text-[#8f6d3d] dark:text-[#c4a06d] font-semibold">
+            Direct Backstage Access
+          </span>
+          <h1 className="text-3xl sm:text-5xl font-serif font-medium text-stone-950 dark:text-stone-50 leading-tight max-w-2xl mx-auto">
+            Connect Directly with Creators
+          </h1>
+          <p className="text-stone-600 dark:text-stone-400 text-sm sm:text-base max-w-xl mx-auto font-light leading-relaxed">
+            Experience 1-on-1 private backstage chat sessions. Select a creator below to start an exclusive conversation.
+          </p>
+
+          {/* User Credits Status Card */}
+          {authLoaded && userId && (
+            <div className="inline-flex items-center gap-4 bg-white dark:bg-[#121212] border border-stone-200 dark:border-stone-850 px-5 py-2.5 rounded-full shadow-sm mt-4">
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-stone-400 dark:text-stone-500 uppercase tracking-widest font-semibold">Your Balance:</span>
+                <span className="text-sm font-bold text-[#8f6d3d]">
+                  {credits !== null ? `${credits} Credits` : "Loading..."}
                 </span>
               </div>
-            ))}
+              <button
+                onClick={() => setIsCreditModalOpen(true)}
+                className="px-3 py-1 text-xs font-semibold tracking-wider uppercase rounded-full bg-[#8f6d3d] hover:bg-[#7a5c32] text-white transition-all duration-200 active:scale-95 cursor-pointer shadow-sm"
+              >
+                + Refill
+              </button>
+            </div>
+          )}
+        </section>
 
-            {isTyping && (
-              <div className="flex flex-col items-start space-y-1">
-                <div className="flex items-center gap-1.5 bg-stone-100 dark:bg-stone-900 rounded-2xl rounded-tl-sm px-4 py-3 shadow-sm">
-                  <span className="w-1.5 h-1.5 bg-[#8f6d3d] rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
-                  <span className="w-1.5 h-1.5 bg-[#8f6d3d] rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
-                  <span className="w-1.5 h-1.5 bg-[#8f6d3d] rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
+        {/* Members Directory */}
+        <section className="space-y-6">
+          <div className="flex justify-between items-end border-b border-stone-200/60 dark:border-stone-850 pb-4">
+            <div>
+              <h2 className="text-xl sm:text-2xl font-serif font-medium text-stone-900 dark:text-stone-100">
+                Backstage Members
+              </h2>
+              <p className="text-xs text-stone-500 dark:text-stone-400 mt-0.5">
+                Choose a member to initiate a private conversation.
+              </p>
+            </div>
+            <span className="text-xs text-[#8f6d3d] font-semibold tracking-wider uppercase">
+              1 Active Member
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+            {/* Active Member Card: Harnoor V. */}
+            <div className="group relative bg-white dark:bg-[#121212] border border-stone-200 dark:border-stone-850 rounded-3xl p-6 shadow-sm hover:shadow-xl hover:border-[#8f6d3d]/50 transition-all duration-300 flex flex-col justify-between">
+              <div className="space-y-4">
+                <div className="flex justify-between items-start">
+                  <div className="relative w-14 h-14 rounded-2xl overflow-hidden border border-stone-200 dark:border-stone-800 bg-[#8f6d3d]/10 flex items-center justify-center">
+                    <img src="/harnoor.jpg" alt="Harnoor V." className="w-full h-full object-cover object-top" />
+                  </div>
+                  <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200/50 dark:border-emerald-900/50">
+                    <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+                    <span className="text-[10px] font-semibold text-emerald-700 dark:text-emerald-400 tracking-wider uppercase">
+                      Active these days
+                    </span>
+                  </div>
+                </div>
+
+                <div>
+                  <h3 className="text-lg font-semibold text-stone-900 dark:text-stone-100 group-hover:text-[#8f6d3d] transition-colors">
+                    Harnoor V.
+                  </h3>
+                  <p className="text-xs text-[#8f6d3d] font-medium mt-0.5">
+                    Instagram Inflencer
+                  </p>
+                  <p className="text-xs text-stone-500 dark:text-stone-400 mt-2 line-clamp-2 leading-relaxed">
+                    Available for 1-on-1 chats, Q&A, and backstage discussions. Ask me anything!
+                  </p>
                 </div>
               </div>
-            )}
-            <div ref={messagesEndRef} />
-          </div>
 
-          {/* Active Message Input Form */}
-          <form onSubmit={handleSend} className="p-6 border-t border-stone-100 dark:border-stone-900 bg-white dark:bg-[#0f0f0f]">
-            {creditsError && (
-              <div className="mb-3 text-xs text-red-600 dark:text-red-400 font-semibold px-4 py-2 bg-red-50 dark:bg-red-950/20 border border-red-200/50 dark:border-red-900/30 rounded-2xl text-center">
-                {creditsError}
-              </div>
-            )}
-            <div className="flex items-center bg-stone-50 dark:bg-stone-950 rounded-full px-4 py-2 border border-stone-200 dark:border-stone-900">
-              <input
-                type="text"
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                placeholder="Type a message..."
-                className="flex-1 bg-transparent border-none text-stone-900 dark:text-stone-100 focus:outline-none focus:ring-0 text-sm py-1.5 placeholder-stone-400 dark:placeholder-stone-600"
-              />
-              <button
-                type="submit"
-                className={`p-2 rounded-full transition-all duration-200 active:scale-90 cursor-pointer ${
-                  input.trim()
-                    ? "bg-[#8f6d3d] text-white shadow-sm"
-                    : "text-stone-300 dark:text-stone-700"
-                }`}
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4 transform rotate-45 -translate-x-[1px] translate-y-[1px]">
-                  <path d="M3.478 2.404a.75.75 0 0 0-.926.941l2.432 7.905H13.5a.75.75 0 0 1 0 1.5H4.984l-2.432 7.905a.75.75 0 0 0 .926.94 60.519 60.519 0 0 0 18.445-8.986.75.75 0 0 0 0-1.218A60.517 60.517 0 0 0 3.478 2.404Z" />
-                </svg>
-              </button>
-            </div>
-          </form>
-        </div>
-      </main>
-    );
-  }
-
-  // --- SIGNED OUT: LANDING PAGE MODE (DEFAULT FALLBACK) ---
-  return (
-    <main className="flex flex-col items-center justify-between min-h-[calc(100vh-4rem)] bg-[#FAF8F5] text-stone-900 dark:bg-[#070707] dark:text-stone-100">
-      
-      {/* Hero Section */}
-      <section className="flex flex-col items-center justify-center text-center px-6 pt-16 pb-12 max-w-4xl w-full">
-        <span className="text-xs uppercase tracking-[0.25em] text-[#8f6d3d] dark:text-[#c4a06d] font-semibold mb-2">
-          Send me a message
-        </span>
-        <h1 className="font-serif text-4xl sm:text-5xl md:text-6xl font-medium tracking-tight text-stone-950 dark:text-stone-50 max-w-3xl leading-[1.15] mb-1">
-          Will reply soon...
-        </h1>
-  
-      </section>
-
-      {/* Landing Page Mockup Chat Sandbox */}
-      <section className="w-full max-w-md px-4 pb-2">
-        <div className="relative rounded-[2.5rem] p-2 bg-white dark:bg-[#0f0f0f] border border-stone-200/60 dark:border-stone-900 shadow-xl overflow-hidden min-h-[10px] flex flex-col justify-between">
-          
-          {/* Header notch */}
-          <div className="flex justify-between items-center px-4 pb-3 border-b border-stone-100 dark:border-stone-900">
-            <div className="flex items-center gap-3">
-              <div className="relative w-10 h-10 rounded-full overflow-hidden border border-stone-200 dark:border-stone-850 bg-[#8f6d3d]/10 text-[#8f6d3d] flex items-center justify-center font-semibold text-sm">
-                HV
-              </div>
-              <div className="flex flex-col text-left">
-                <span className="font-semibold text-sm tracking-wide text-stone-950 dark:text-stone-50">Harnoor V.</span>
-                <span className="text-[10px] text-[#8f6d3d] font-semibold tracking-wider uppercase">Online hour ago</span>
+              <div className="pt-6">
+                <Link
+                  href="/harnoor"
+                  className="w-full py-3 px-5 rounded-2xl bg-[#8f6d3d] hover:bg-[#7a5c32] text-white font-medium text-xs tracking-wide transition-all duration-200 active:scale-95 shadow-md flex items-center justify-center gap-2 group-hover:shadow-lg"
+                >
+                  <span>Chat with Harnoor</span>
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
+                  </svg>
+                </Link>
               </div>
             </div>
-          </div>
 
-          {/* Chat List (just initial greeting message) */}
-          <div className="flex-1 overflow-y-auto py-1 px-2 space-y-4 max-h-[360px] min-h-[300px]">
-            <div className="flex flex-col items-start space-y-1">
-              <div className="px-4 py-3 rounded-2xl max-w-[80%] text-sm shadow-sm leading-relaxed text-left bg-stone-100 text-stone-900 dark:bg-stone-900 dark:text-stone-100 rounded-tl-sm">
-                Hi tell me something about yourself?
+            {/* Placeholder Member Card 1 */}
+            <div className="bg-white/40 dark:bg-[#121212]/40 border border-dashed border-stone-200 dark:border-stone-800 rounded-3xl p-6 flex flex-col justify-between opacity-70">
+              <div className="space-y-4">
+                <div className="flex justify-between items-start">
+                  <div className="w-14 h-14 rounded-2xl bg-stone-100 dark:bg-stone-900 border border-stone-200 dark:border-stone-800 flex items-center justify-center">
+                    <span className="text-stone-400 font-serif text-lg">AM</span>
+                  </div>
+                  <span className="px-3 py-1 rounded-full bg-stone-100 dark:bg-stone-900 text-[10px] font-semibold text-stone-500 tracking-wider uppercase">
+                    Not Active
+                  </span>
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-stone-700 dark:text-stone-300">
+                    Ritu
+                  </h3>
+                  <p className="text-xs text-stone-400 font-medium mt-0.5">
+                    Instagram Influencer
+                  </p>
+                  <p className="text-xs text-stone-400 dark:text-stone-500 mt-2">
+                  Available for 1-on-1 chats, Q&A, and backstage discussions. Ask me anything!
+                  </p>
+                </div>
               </div>
-              <span className="text-[9px] text-stone-400 px-1 uppercase tracking-wider">ONLINE hour ago</span>
+              <div className="pt-6">
+                <button disabled className="w-full py-3 px-5 rounded-2xl bg-stone-200 dark:bg-stone-850 text-stone-400 font-medium text-xs cursor-not-allowed">
+                  Not Active
+                </button>
+              </div>
             </div>
-            <div ref={messagesEndRef} />
+
+            {/* Placeholder Member Card 2 */}
+            <div className="bg-white/40 dark:bg-[#121212]/40 border border-dashed border-stone-200 dark:border-stone-800 rounded-3xl p-6 flex flex-col justify-between opacity-70">
+              <div className="space-y-4">
+                <div className="flex justify-between items-start">
+                  <div className="w-14 h-14 rounded-2xl bg-stone-100 dark:bg-stone-900 border border-stone-200 dark:border-stone-800 flex items-center justify-center">
+                    <span className="text-stone-400 font-serif text-lg">KS</span>
+                  </div>
+                  <span className="px-3 py-1 rounded-full bg-stone-100 dark:bg-stone-900 text-[10px] font-semibold text-stone-500 tracking-wider uppercase">
+                    Not active
+                  </span>
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-stone-700 dark:text-stone-300">
+                    Karan S.
+                  </h3>
+                  <p className="text-xs text-stone-400 font-medium mt-0.5">
+                    Instagram Infleuncer
+                  </p>
+                  <p className="text-xs text-stone-400 dark:text-stone-500 mt-2">
+                  Available for 1-on-1 chats, Q&A, and backstage discussions. Ask me anything!
+                  </p>
+                </div>
+              </div>
+              <div className="pt-6">
+                <button disabled className="w-full py-3 px-5 rounded-2xl bg-stone-200 dark:bg-stone-850 text-stone-400 font-medium text-xs cursor-not-allowed">
+                  Not Active
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* Pricing / Refill Section */}
+        <section className="bg-white dark:bg-[#121212] border border-stone-200 dark:border-stone-850 rounded-3xl p-6 sm:p-8 space-y-6">
+          <div className="text-center max-w-xl mx-auto space-y-2">
+            <span className="text-[10px] uppercase tracking-[0.25em] text-[#8f6d3d] font-semibold">
+              Credit Refill Packs
+            </span>
+            <h2 className="text-2xl font-serif font-medium text-stone-900 dark:text-stone-100">
+              Refill Your Chat Credits
+            </h2>
+            <p className="text-xs text-stone-500 dark:text-stone-400">
+              Each sent message uses 1 credit. New accounts start with 10 free credits.
+            </p>
           </div>
 
-          {/* Form intercepts click to open Clerk modal directly */}
-          <form onSubmit={handleLandingSubmit} className="relative pt-3 border-t border-stone-100 dark:border-stone-900">
-            <div className="absolute -top-7 left-0 right-0 bg-[#fbf5eb] dark:bg-[#201b13] border-y border-[#8f6d3d]/20 py-1.5 px-4 text-center">
-              <span className="text-[10px] sm:text-xs font-serif text-[#8f6d3d] dark:text-[#c4a06d] tracking-wide font-medium">
-                Send your first message after signing up.
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 max-w-3xl mx-auto">
+            <div className="border border-stone-200 dark:border-stone-800 rounded-2xl p-5 text-center space-y-3 bg-stone-50/50 dark:bg-stone-900/30">
+              <span className="text-xs font-semibold text-stone-500 uppercase tracking-wider">Starter</span>
+              <div className="text-2xl font-bold text-stone-900 dark:text-stone-100">50 Credits</div>
+              <p className="text-xs text-stone-500">$3.00 CAD (~₹180)</p>
+            </div>
+            <div className="border-2 border-[#8f6d3d] rounded-2xl p-5 text-center space-y-3 bg-[#8f6d3d]/5 relative">
+              <span className="absolute -top-3 left-1/2 -translate-x-1/2 bg-[#8f6d3d] text-white text-[9px] font-semibold tracking-wider px-3 py-0.5 rounded-full uppercase">
+                Most Popular
               </span>
+              <span className="text-xs font-semibold text-[#8f6d3d] uppercase tracking-wider">Popular</span>
+              <div className="text-2xl font-bold text-stone-900 dark:text-stone-100">100 Credits</div>
+              <p className="text-xs text-stone-500">$5.00 CAD (~₹300)</p>
             </div>
-            <div className="flex items-center bg-stone-50 dark:bg-stone-950 rounded-full px-4 py-2 border border-stone-200 dark:border-stone-900">
-              <input
-                type="text"
-                value={landingInput}
-                onChange={(e) => setLandingInput(e.target.value)}
-                placeholder="Type a message..."
-                className="flex-1 bg-transparent border-none text-stone-900 dark:text-stone-100 focus:outline-none focus:ring-0 text-sm py-1.5 placeholder-stone-400 dark:placeholder-stone-600"
-              />
+            <div className="border border-stone-200 dark:border-stone-800 rounded-2xl p-5 text-center space-y-3 bg-stone-50/50 dark:bg-stone-900/30">
+              <span className="text-xs font-semibold text-emerald-600 uppercase tracking-wider">Best Value</span>
+              <div className="text-2xl font-bold text-stone-900 dark:text-stone-100">200 Credits</div>
+              <p className="text-xs text-stone-500">$8.00 CAD (~₹500)</p>
+            </div>
+          </div>
+
+          <div className="text-center pt-2">
+            {authLoaded && userId ? (
               <button
-                type="submit"
-                className={`p-2 rounded-full transition-all duration-200 active:scale-90 cursor-pointer ${
-                  landingInput.trim()
-                    ? "bg-[#8f6d3d] text-white shadow-sm"
-                    : "text-stone-300 dark:text-stone-700"
-                }`}
+                onClick={() => setIsCreditModalOpen(true)}
+                className="py-3 px-8 rounded-full bg-[#8f6d3d] hover:bg-[#7a5c32] text-white font-medium text-sm transition-all duration-200 active:scale-95 shadow-md inline-flex items-center gap-2"
               >
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4 transform rotate-45 -translate-x-[1px] translate-y-[1px]">
-                  <path d="M3.478 2.404a.75.75 0 0 0-.926.941l2.432 7.905H13.5a.75.75 0 0 1 0 1.5H4.984l-2.432 7.905a.75.75 0 0 0 .926.94 60.519 60.519 0 0 0 18.445-8.986.75.75 0 0 0 0-1.218A60.517 60.517 0 0 0 3.478 2.404Z" />
+                <span>Refill Credits Now</span>
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
                 </svg>
               </button>
-            </div>
-          </form>
-        </div>
-      </section>
+            ) : (
+              <button
+                onClick={() => clerk.openSignIn()}
+                className="py-3 px-8 rounded-full bg-[#8f6d3d] hover:bg-[#7a5c32] text-white font-medium text-sm transition-all duration-200 active:scale-95 shadow-md"
+              >
+                Sign In to View Credits
+              </button>
+            )}
+          </div>
+        </section>
+      </div>
 
-      {/* Footer Section */}
-      <footer className="w-full bg-[#FAF8F5] dark:bg-[#070707] py-12 px-6 border-t border-stone-200/30 dark:border-stone-900/30 flex flex-col items-center justify-center">
-        <div className="font-serif tracking-[0.2em] text-[#8f6d3d] dark:text-[#c4a06d] text-xs font-semibold mb-6">
-          BACKSTAGE CHAT.ME
-        </div>
-        <div className="flex gap-6 text-xs text-stone-500 dark:text-stone-400 mb-8">
-          <a href="#" className="hover:text-stone-800 dark:hover:text-stone-100">Terms of Service</a>
-          <a href="#" className="hover:text-stone-800 dark:hover:text-stone-100">Privacy Policy</a>
-          <a href="#" className="hover:text-stone-800 dark:hover:text-stone-100">Cookie Policy</a>
-          <a href="#" className="hover:text-stone-800 dark:hover:text-stone-100">Support</a>
-        </div>
-        <p className="text-[10px] text-stone-400 dark:text-stone-600 uppercase tracking-widest">
-          © 2026 BACKSTAGE ACCESS. ALL RIGHTS RESERVED.
-        </p>
-      </footer>
+      <CreditModal
+        isOpen={isCreditModalOpen}
+        onClose={() => setIsCreditModalOpen(false)}
+        userDbId={userDbId}
+        onCheckout={handleCheckout}
+        isLoading={isCheckoutLoading}
+      />
     </main>
   );
 }
