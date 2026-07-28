@@ -307,6 +307,7 @@ export default function Home() {
         userDbId={userDbId}
         onCheckout={handleCheckout}
         isLoading={isCheckoutLoading}
+        errorText={creditsError}
       />
     </main>
   );

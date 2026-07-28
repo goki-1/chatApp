@@ -8,9 +8,10 @@ interface CreditModalProps {
   userDbId: number | null;
   onCheckout: (creditsTier: 50 | 100 | 200, currencyCode: string) => Promise<void>;
   isLoading: boolean;
+  errorText?: string | null;
 }
 
-export function CreditModal({ isOpen, onClose, userDbId, onCheckout, isLoading }: CreditModalProps) {
+export function CreditModal({ isOpen, onClose, userDbId, onCheckout, isLoading, errorText }: CreditModalProps) {
   const [selectedTier, setSelectedTier] = useState<50 | 100 | 200>(100);
   const [currencySymbol, setCurrencySymbol] = useState("CAD $");
   const [exchangeRate, setExchangeRate] = useState(1);
@@ -162,6 +163,12 @@ export function CreditModal({ isOpen, onClose, userDbId, onCheckout, isLoading }
             );
           })}
         </div>
+
+        {errorText && (
+          <div className="mb-4 text-xs text-red-600 dark:text-red-400 font-medium px-4 py-2.5 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/40 rounded-2xl text-center">
+            {errorText}
+          </div>
+        )}
 
         {/* Action Button */}
         <button

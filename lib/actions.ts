@@ -257,13 +257,15 @@ export async function createCheckoutSession(
   currencyCode: string = "cad"
 ) {
   try {
-    const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
+    const stripeSecretKey = process.env.STRIPE_SECRET_KEY || process.env.STRIPE_SECRET_KEY_L;
     if (!stripeSecretKey || stripeSecretKey.includes("your_stripe_secret_key_here")) {
       console.error("Missing valid STRIPE_SECRET_KEY in environment variables");
-      return { success: false, error: "Stripe API Key is missing in .env.local. Please configure STRIPE_SECRET_KEY." };
+      return { success: false, error: "Stripe API Key is missing in environment variables. Please add STRIPE_SECRET_KEY in Cloudflare settings." };
     }
 
-    const stripe = new Stripe(stripeSecretKey);
+    const stripe = new Stripe(stripeSecretKey, {
+      httpClient: Stripe.createFetchHttpClient(),
+    });
 
     const curr = currencyCode.toLowerCase();
     let unitAmount = 300; // default CAD cents ($3.00)
