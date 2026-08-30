@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useAuth, useUser, useClerk } from "@clerk/nextjs";
 import { syncUser, getMessages, sendMessageAction, markMessageAsRead, createCheckoutSession, getLastBotActiveTime } from "@/lib/actions";
 import { CreditModal } from "@/components/CreditModal";
+import { supabase } from "@/lib/supabase";
 
 interface Message {
   id: string;
@@ -17,15 +18,16 @@ interface Message {
 
 function getBotStatus(messagesList: Message[], lastBotCreatedAt: string | null = null) {
   const botMsgs = messagesList.filter(m => m.sender === "Harnoor" && m.createdAt);
-  let rawDateStr: string | null = null;
+  let rawDateStr: string | null = lastBotCreatedAt;
 
   if (botMsgs.length > 0 && botMsgs[botMsgs.length - 1].createdAt) {
-    rawDateStr = botMsgs[botMsgs.length - 1].createdAt!;
-  } else if (lastBotCreatedAt) {
-    rawDateStr = lastBotCreatedAt;
+    const lastMsgTime = botMsgs[botMsgs.length - 1].createdAt!;
+    if (!rawDateStr || new Date(lastMsgTime).getTime() > new Date(rawDateStr).getTime()) {
+      rawDateStr = lastMsgTime;
+    }
   }
 
-  if (!rawDateStr) {
+  if (!rawDateStr) {  ``
     return { text: "Online", isOnline: true };
   }
 
@@ -64,7 +66,7 @@ export default function HarnoorPage() {
     {
       id: "1",
       sender: "Harnoor",
-      text: "Hi! Tell me something about yourself?",
+      text: "Hello sir ji?",
       timestamp: "",
     },
   ]);
@@ -77,6 +79,11 @@ export default function HarnoorPage() {
   const [currentConversationType, setCurrentConversationType] = useState<string | null>(null);
   const [creditsError, setCreditsError] = useState<string | null>(null);
 
+  // Pagination states
+  const [hasMoreMessages, setHasMoreMessages] = useState(false);
+  const [isLoadingEarlier, setIsLoadingEarlier] = useState(false);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+
   // Stripe Payment & Refill Modal states
   const [isCreditModalOpen, setIsCreditModalOpen] = useState(false);
   const [isCheckoutLoading, setIsCheckoutLoading] = useState(false);
@@ -85,23 +92,23 @@ export default function HarnoorPage() {
   // Database active status timestamp for Harnoor
   const [lastBotCreatedAt, setLastBotCreatedAt] = useState<string | null>(null);
 
-  // Trigger state to recalculate bot active status periodically
-  const [timeTrigger, setTimeTrigger] = useState(0);
+  // Trigger state to recalculate bot active status text locally in browser
+  const [, setTimeTrigger] = useState(0);
   useEffect(() => {
     const interval = setInterval(() => {
       setTimeTrigger(prev => prev + 1);
-    }, 15000); // 15s interval
+    }, 30000); // 30s interval for local UI timer text
     return () => clearInterval(interval);
   }, []);
 
-  // Fetch Harnoor's latest message activity timestamp across database
+  // Fetch Harnoor's latest message activity timestamp ONCE on page mount
   useEffect(() => {
     getLastBotActiveTime().then((res) => {
       if (res.success && res.createdAt) {
         setLastBotCreatedAt(res.createdAt);
       }
     });
-  }, [timeTrigger]);
+  }, []);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -147,12 +154,13 @@ export default function HarnoorPage() {
     }
   }, [authLoaded, userId, userLoaded, user]);
 
-  // Load messages once we have the database user ID
+  // Load initial 20 messages once we have the database user ID
   useEffect(() => {
     if (userDbId) {
-      getMessages(userDbId)
+      getMessages(userDbId, 20)
         .then((res) => {
           if (res.success && res.messages) {
+            setHasMoreMessages(Boolean(res.hasMore));
             const formatted: Message[] = res.messages.map((m: any) => ({
               id: String(m.id),
               sender: (m.sender_type === "user" ? "user" : "Harnoor") as "user" | "Harnoor",
@@ -172,6 +180,115 @@ export default function HarnoorPage() {
           console.error("Error fetching message history:", err);
         });
     }
+  }, [userDbId]);
+
+  // Load earlier 20 messages when user clicks "Load earlier messages"
+  const handleLoadEarlier = async () => {
+    if (!userDbId || isLoadingEarlier || !hasMoreMessages) return;
+
+    const oldestMsg = messages.find((m) => !isNaN(Number(m.id)));
+    if (!oldestMsg) return;
+
+    const beforeId = Number(oldestMsg.id);
+    setIsLoadingEarlier(true);
+
+    const container = scrollContainerRef.current;
+    const oldScrollHeight = container ? container.scrollHeight : 0;
+
+    try {
+      const res = await getMessages(userDbId, 20, beforeId);
+      if (res.success && res.messages) {
+        setHasMoreMessages(Boolean(res.hasMore));
+        const formattedEarlier: Message[] = res.messages.map((m: any) => ({
+          id: String(m.id),
+          sender: (m.sender_type === "user" ? "user" : "Harnoor") as "user" | "Harnoor",
+          text: m.message_text,
+          timestamp: new Date(m.created_at).toLocaleTimeString("en-US", { hour: '2-digit', minute: '2-digit' }),
+          createdAt: m.created_at,
+          status: m.is_read ? 'read' : 'delivered',
+        }));
+
+        setMessages((prev) => [...formattedEarlier, ...prev]);
+
+        setTimeout(() => {
+          if (container) {
+            const newScrollHeight = container.scrollHeight;
+            container.scrollTop = newScrollHeight - oldScrollHeight;
+          }
+        }, 50);
+      }
+    } catch (err) {
+      console.error("Error loading earlier messages:", err);
+    } finally {
+      setIsLoadingEarlier(false);
+    }
+  };
+
+  // Pure Supabase Realtime WebSocket subscription for incoming messages, read receipts, and ai_typing updates
+  useEffect(() => {
+    if (!userDbId) return;
+
+    const channel = supabase
+      .channel(`user-realtime-${userDbId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "messages",
+          filter: `user_id=eq.${userDbId}`,
+        },
+        (payload) => {
+          if (payload.eventType === "INSERT") {
+            const newMsg = payload.new as any;
+            if (newMsg && newMsg.sender_type !== "user") {
+              setMessages((prev) => {
+                if (prev.some((m) => m.id === String(newMsg.id))) return prev;
+                return [
+                  ...prev,
+                  {
+                    id: String(newMsg.id),
+                    sender: (newMsg.sender_type === "user" ? "user" : "Harnoor") as "Harnoor" | "user",
+                    text: newMsg.message_text,
+                    timestamp: new Date(newMsg.created_at).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }),
+                    createdAt: newMsg.created_at,
+                  },
+                ];
+              });
+            }
+          } else if (payload.eventType === "UPDATE") {
+            const updatedMsg = payload.new as any;
+            if (updatedMsg && updatedMsg.sender_type === "user" && updatedMsg.is_read) {
+              setMessages((prev) =>
+                prev.map((msg) =>
+                  msg.id === String(updatedMsg.id) ? { ...msg, status: "read" } : msg
+                )
+              );
+              setLastBotCreatedAt(new Date().toISOString());
+            }
+          }
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "users",
+          filter: `id=eq.${userDbId}`,
+        },
+        (payload) => {
+          const record = payload.new as any;
+          if (record && typeof record.ai_typing === "boolean") {
+            setIsTyping(record.ai_typing);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [userDbId]);
 
   // Handle Stripe Payment redirect status
@@ -199,11 +316,12 @@ export default function HarnoorPage() {
     }
   }, [authLoaded, userId, userLoaded, user]);
 
-  const handleCheckout = async (creditsTier: 50 | 100 | 200, currencyCode: string = "cad") => {
+  const handleCheckout = async (creditsTier: 50 | 100 | 200, currencyCode: string = "usd") => {
     if (!userDbId) return;
     setIsCheckoutLoading(true);
     try {
-      const res = await createCheckoutSession(userDbId, creditsTier, window.location.origin, currencyCode);
+      const currentUrl = window.location.origin + window.location.pathname;
+      const res = await createCheckoutSession(userDbId, creditsTier, currentUrl, currencyCode);
       if (res.success && res.url) {
         window.location.href = res.url;
       } else {
@@ -252,7 +370,6 @@ export default function HarnoorPage() {
       status: 'sent',
     };
     setMessages((prev) => [...prev, userMsg]);
-    setIsTyping(true);
 
     try {
       const res = await sendMessageAction(userDbId, userText);
@@ -273,39 +390,11 @@ export default function HarnoorPage() {
               : msg
           )
         );
-
-        const dbMsgId = res.userMsgId;
-        setTimeout(async () => {
-          setMessages((prev) =>
-            prev.map((msg) =>
-              msg.id === String(dbMsgId) ? { ...msg, status: 'read' } : msg
-            )
-          );
-          if (dbMsgId) {
-            await markMessageAsRead(dbMsgId);
-          }
-        }, 1000);
-
-        setTimeout(() => {
-          setIsTyping(false);
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: String(res.botMsgId || "reply-" + Date.now()),
-              sender: "Harnoor",
-              text: res.botReply || "",
-              timestamp: new Date(res.botMsgCreatedAt || Date.now()).toLocaleTimeString("en-US", { hour: '2-digit', minute: '2-digit' }),
-              createdAt: res.botMsgCreatedAt || new Date().toISOString(),
-            },
-          ]);
-        }, res.delayMs || 1500);
       } else {
-        setIsTyping(false);
         setCreditsError(res.error || "Failed to send message");
         setMessages((prev) => prev.filter((m) => m.id !== tempUserMsgId));
       }
     } catch (err: any) {
-      setIsTyping(false);
       setCreditsError(err.message || "Failed to send message");
       setMessages((prev) => prev.filter((m) => m.id !== tempUserMsgId));
     }
@@ -315,50 +404,57 @@ export default function HarnoorPage() {
   if (authLoaded && !userId) {
     const status = getBotStatus(messages, lastBotCreatedAt);
     return (
-      <main className="relative w-full min-h-[calc(100vh-4rem)] bg-[#FAF8F5] text-stone-900 dark:bg-[#070707] dark:text-stone-100 flex items-start justify-center p-4 sm:p-6 pt-4 sm:pt-8 overflow-hidden">
-        {/* Background Ambient Backdrop with Photo Accent */}
-        <div className="absolute inset-0 z-0 flex items-center justify-center opacity-30 dark:opacity-20 pointer-events-none blur-3xl scale-125">
-          <img src="/harnoor.jpg" alt="" className="w-96 h-96 object-cover object-top rounded-full" />
+      <main className="relative w-full min-h-[calc(100vh-4rem)] bg-[#F5F2EB] dark:bg-[#050505] text-stone-900 dark:text-stone-100 flex items-start justify-center p-4 sm:p-6 pt-4 sm:pt-8 overflow-hidden">
+        {/* Apple-Style Glassmorphic Studio Mesh Backdrop */}
+        <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none">
+          <div className="absolute -top-40 -left-40 w-[650px] h-[650px] rounded-full bg-gradient-to-tr from-[#8f6d3d]/50 via-[#c4a06d]/35 to-amber-500/20 dark:from-[#8f6d3d]/40 dark:via-[#c4a06d]/25 dark:to-[#3a2712]/60 blur-[100px] animate-pulse" />
+          <div className="absolute -bottom-40 -right-40 w-[600px] h-[600px] rounded-full bg-gradient-to-br from-[#c4a06d]/40 via-[#8f6d3d]/30 to-amber-600/20 dark:from-[#3a2712]/50 dark:to-[#1a1208]/70 blur-[90px]" />
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[450px] h-[450px] rounded-full bg-[#8f6d3d]/25 dark:bg-[#8f6d3d]/15 blur-[80px]" />
+          {/* Subtle Grid Texture */}
+          <div className="absolute inset-0 bg-[radial-gradient(#8f6d3d_1px,transparent_1px)] dark:bg-[radial-gradient(#c4a06d_1px,transparent_1px)] [background-size:24px_24px] opacity-15 dark:opacity-10" />
         </div>
 
         {/* Centered Compact Chat Card */}
-        <div className="relative z-10 max-w-md w-full bg-white/95 dark:bg-[#121212]/95 border border-stone-200/80 dark:border-stone-850 rounded-3xl shadow-2xl backdrop-blur-xl overflow-hidden flex flex-col min-h-[480px] sm:min-h-[540px]">
+        <div className="relative z-10 max-w-md w-full bg-white/70 dark:bg-[#121212]/70 border-2 border-stone-300 dark:border-[#c4a06d]/50 rounded-3xl shadow-[0_0_35px_rgba(196,160,109,0.2)] backdrop-blur-2xl overflow-hidden flex flex-col min-h-[480px] sm:min-h-[540px]">
           {/* Card Header / Creator Profile */}
           <div className="relative px-6 pt-6 pb-4 bg-stone-50/40 dark:bg-black/30">
 
             <div className="flex flex-col items-center text-center space-y-2">
-              <div className="relative w-16 h-16 rounded-full overflow-hidden border-2 border-[#8f6d3d]/40 bg-[#8f6d3d]/10 flex items-center justify-center shadow-md">
-                <img src="/harnoor.jpg" alt="Harnoor V." className="w-full h-full object-cover object-top" />
+              <div className="relative w-16 h-16 rounded-full overflow-hidden border-2 border-[#8f6d3d]/60 bg-[#8f6d3d]/10 flex items-center justify-center shadow-md">
+                <img src="/harnoor.jpg" alt="Harnoor K." className="w-full h-full object-cover object-top" />
               </div>
               <div>
-                <h2 className="font-serif font-medium text-lg text-stone-950 dark:text-stone-50">Harnoor V.</h2>
+                <h2 className="font-serif font-medium text-lg text-stone-950 dark:text-stone-50">Harnoor K.</h2>
                 <div className="flex items-center justify-center gap-1.5 mt-0.5">
                   {status.isOnline && (
                     <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
                   )}
-                  <span className="text-[10px] text-[#8f6d3d] font-semibold tracking-wider uppercase">
+                  <span className="text-[10px] text-[#8f6d3d] dark:text-[#c4a06d] font-semibold tracking-wider uppercase">
                     {status.text}
                   </span>
                 </div>
               </div>
               <p className="text-sm sm:text-base text-[#8f6d3d] dark:text-[#c4a06d] font-medium italic pt-1">
-                ✨ Send a message, I will reply soon...
+                Chat for FREE
+              </p>
+              <p className="text-sm sm:text-base text-[#8f6d3d] dark:text-[#c4a06d] font-medium italic pt-1">
+                ✨ I will reply in 1 minute ...
               </p>
             </div>
           </div>
 
           {/* Sample Chat Preview Area */}
-          <div className="flex-1 p-6 space-y-4 min-h-[200px] sm:min-h-[260px] overflow-y-auto bg-stone-50/20 dark:bg-black/10">
+          <div className="flex-1 p-6 space-y-4 min-h-[200px] sm:min-h-[260px] overflow-y-auto bg-stone-50/30 dark:bg-black/20">
             <div className="flex flex-col items-start space-y-1">
-              <div className="max-w-[85%] px-4 py-2.5 rounded-2xl rounded-bl-none bg-stone-100 text-stone-800 dark:bg-stone-900 dark:text-stone-200 text-xs sm:text-sm leading-relaxed shadow-sm">
-                Hi! Tell me something about yourself?
+              <div className="max-w-[85%] px-4 py-2.5 rounded-2xl rounded-bl-none bg-stone-200/90 text-stone-900 dark:bg-stone-800/95 dark:text-stone-50 text-xs sm:text-sm leading-relaxed border border-stone-300 dark:border-stone-700/80 shadow-xs font-medium">
+                Hello sir ji ?
               </div>
             </div>
           </div>
 
           {/* Compact Guest Input Form */}
-          <form onSubmit={handleLandingSubmit} className="p-4 sm:p-5 bg-white dark:bg-[#121212]">
-            <div className="flex items-center bg-stone-50 dark:bg-stone-950 rounded-full px-4 py-2 border border-stone-200 dark:border-stone-900 shadow-sm focus-within:border-[#8f6d3d] transition-colors">
+          <form onSubmit={handleLandingSubmit} className="p-4 sm:p-5 bg-white/90 dark:bg-[#121212]/90">
+            <div className="flex items-center bg-stone-100/90 dark:bg-stone-900/90 rounded-full px-4 py-2.5 border-2 border-[#8f6d3d]/70 dark:border-[#c4a06d]/80 focus-within:border-[#8f6d3d] dark:focus-within:border-[#c4a06d] focus-within:ring-4 focus-within:ring-[#8f6d3d]/30 shadow-[0_0_15px_rgba(196,160,109,0.2)] transition-all">
               <input
                 type="text"
                 value={landingInput}
@@ -369,9 +465,9 @@ export default function HarnoorPage() {
               <button
                 type="submit"
                 disabled={!landingInput.trim()}
-                className="w-8 h-8 rounded-full bg-[#8f6d3d] text-white flex items-center justify-center disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-200 hover:bg-[#7a5c32] active:scale-95 cursor-pointer ml-1 shrink-0"
+                className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-gradient-to-tr from-[#9e7a44] via-[#b59052] to-[#d4af37] text-white flex items-center justify-center disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-200 hover:scale-105 active:scale-95 shadow-md shadow-[#9e7a44]/40 hover:shadow-lg cursor-pointer ml-1.5 shrink-0"
               >
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-3.5 h-3.5 -rotate-45 translate-x-[1px] -translate-y-[1px]">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4 sm:w-4.5 sm:h-4.5 -rotate-45 translate-x-[1px] -translate-y-[1px] text-white filter drop-shadow-md">
                   <path d="M3.478 2.404a.75.75 0 0 0-.926.941l2.432 7.917H13.5a.75.75 0 0 1 0 1.5H4.984l-2.432 7.917a.75.75 0 0 0 .926.941l18-8a.75.75 0 0 0 0-1.382l-18-8Z" />
                 </svg>
               </button>
@@ -388,19 +484,28 @@ export default function HarnoorPage() {
   // Signed In Active Chat View
   return (
     <main
-      className="w-full h-[calc(100vh-4rem)] bg-[#FAF8F5] text-stone-900 dark:bg-[#070707] dark:text-stone-100 flex flex-col"
+      className="relative w-full h-[calc(100vh-4rem)] bg-[#F5F2EB] dark:bg-[#050505] text-stone-900 dark:text-stone-100 flex flex-col overflow-hidden"
       data-conversation-type={currentConversationType ?? undefined}
     >
+      {/* Apple-Style Glassmorphic Studio Mesh Backdrop */}
+      <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none">
+        <div className="absolute -top-40 -left-40 w-[650px] h-[650px] rounded-full bg-gradient-to-tr from-[#8f6d3d]/45 via-[#c4a06d]/30 to-amber-500/20 dark:from-[#8f6d3d]/35 dark:via-[#c4a06d]/20 dark:to-[#3a2712]/50 blur-[100px] animate-pulse" />
+        <div className="absolute -bottom-40 -right-40 w-[600px] h-[600px] rounded-full bg-gradient-to-br from-[#c4a06d]/35 via-[#8f6d3d]/25 to-amber-600/15 dark:from-[#3a2712]/45 dark:to-[#1a1208]/60 blur-[90px]" />
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[450px] h-[450px] rounded-full bg-[#8f6d3d]/20 dark:bg-[#8f6d3d]/10 blur-[80px]" />
+        {/* Subtle Grid Texture */}
+        <div className="absolute inset-0 bg-[radial-gradient(#8f6d3d_1px,transparent_1px)] dark:bg-[radial-gradient(#c4a06d_1px,transparent_1px)] [background-size:24px_24px] opacity-15 dark:opacity-10" />
+      </div>
+
       {/* Full Screen Chat Sandbox / Message Window */}
-      <div className="relative w-full h-full bg-white dark:bg-[#0f0f0f] flex flex-col justify-between">
+      <div className="relative z-10 w-full h-full bg-white/60 dark:bg-[#0c0c0c]/60 backdrop-blur-2xl flex flex-col justify-between">
         {/* Contact Status Bar */}
         <div className="flex justify-between items-center px-6 py-4 border-b border-stone-100 dark:border-stone-900 bg-stone-50/20 dark:bg-black/20">
           <div className="flex items-center gap-3">
             <div className="relative w-10 h-10 rounded-full overflow-hidden border border-stone-200 dark:border-stone-850">
-              <img src="/harnoor.jpg" alt="Harnoor V." className="w-full h-full object-cover object-top" />
+              <img src="/harnoor.jpg" alt="Harnoor K." className="w-full h-full object-cover object-top" />
             </div>
             <div className="flex flex-col text-left">
-              <span className="font-semibold text-sm tracking-wide text-stone-950 dark:text-stone-50">Harnoor V.</span>
+              <span className="font-semibold text-sm tracking-wide text-stone-950 dark:text-stone-50">Harnoor K.</span>
               <div className="flex items-center gap-1">
                 {getBotStatus(messages, lastBotCreatedAt).isOnline && (
                   <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
@@ -428,7 +533,19 @@ export default function HarnoorPage() {
         </div>
 
         {/* Message List - Full Screen Height */}
-        <div className="flex-1 overflow-y-auto py-6 px-6 space-y-4">
+        <div ref={scrollContainerRef} className="flex-1 overflow-y-auto py-6 px-6 space-y-4">
+          {hasMoreMessages && (
+            <div className="flex justify-center pb-2">
+              <button
+                type="button"
+                onClick={handleLoadEarlier}
+                disabled={isLoadingEarlier}
+                className="text-xs text-[#8f6d3d] hover:text-[#7a5c32] dark:text-[#c4a06d] bg-stone-100/90 dark:bg-stone-900/80 border border-stone-200/80 dark:border-stone-800/80 px-4 py-1.5 rounded-full shadow-xs disabled:opacity-50 font-medium transition-all cursor-pointer"
+              >
+                {isLoadingEarlier ? "Loading earlier messages..." : "Load earlier messages"}
+              </button>
+            </div>
+          )}
           {messages.map((msg) => (
             <div
               key={msg.id}
@@ -440,7 +557,7 @@ export default function HarnoorPage() {
                 className={`max-w-[75%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed ${
                   msg.sender === "user"
                     ? "bg-[#8f6d3d] text-white rounded-br-none shadow-sm"
-                    : "bg-stone-100 text-stone-800 dark:bg-stone-900 dark:text-stone-200 rounded-bl-none"
+                    : "bg-stone-200/90 text-stone-900 dark:bg-stone-800/95 dark:text-stone-50 rounded-bl-none border border-stone-300 dark:border-stone-700/80 shadow-xs font-medium"
                 }`}
               >
                 {msg.text}
@@ -453,7 +570,7 @@ export default function HarnoorPage() {
                 )}
                 {/* Ticks for user messages */}
                 {msg.sender === "user" && msg.status && (
-                  <span className="text-xs">
+                  <span className="text-[10px] opacity-80 leading-none">
                     {msg.status === "sent" && (
                       <span className="text-stone-400" title="Sent">✓</span>
                     )}
@@ -472,7 +589,7 @@ export default function HarnoorPage() {
           {/* Typing Indicator */}
           {isTyping && (
             <div className="flex flex-col items-start space-y-1">
-              <div className="bg-stone-100 dark:bg-stone-900 px-4 py-3 rounded-2xl rounded-bl-none flex items-center space-x-1.5">
+              <div className="bg-stone-100/90 dark:bg-stone-900/80 border border-stone-200/60 dark:border-stone-800/60 px-4 py-3 rounded-2xl rounded-bl-none flex items-center space-x-1.5 shadow-xs">
                 <span className="w-1.5 h-1.5 bg-stone-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
                 <span className="w-1.5 h-1.5 bg-stone-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
                 <span className="w-1.5 h-1.5 bg-stone-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
@@ -497,7 +614,7 @@ export default function HarnoorPage() {
               <button type="button" onClick={() => setIsCreditModalOpen(true)} className="underline text-[#8f6d3d] font-bold ml-2">Refill Now</button>
             </div>
           )}
-          <div className="flex items-center bg-stone-50 dark:bg-stone-950 rounded-full px-4 py-2 border border-stone-200 dark:border-stone-900">
+          <div className="flex items-center bg-stone-100/90 dark:bg-stone-900/90 rounded-full px-4 py-2.5 border-2 border-[#8f6d3d]/70 dark:border-[#c4a06d]/80 focus-within:border-[#8f6d3d] dark:focus-within:border-[#c4a06d] focus-within:ring-4 focus-within:ring-[#8f6d3d]/30 shadow-[0_0_15px_rgba(196,160,109,0.2)] transition-all">
             <input
               type="text"
               value={input}
@@ -508,9 +625,9 @@ export default function HarnoorPage() {
             <button
               type="submit"
               disabled={!input.trim()}
-              className="w-8 h-8 rounded-full bg-[#8f6d3d] text-white flex items-center justify-center disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-200 hover:bg-[#7a5c32] active:scale-95 cursor-pointer ml-2"
+              className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-gradient-to-tr from-[#9e7a44] via-[#b59052] to-[#d4af37] text-white flex items-center justify-center disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-200 hover:scale-105 active:scale-95 shadow-md shadow-[#9e7a44]/40 hover:shadow-lg cursor-pointer ml-2 shrink-0"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4 -rotate-45 translate-x-[1px] -translate-y-[1px]">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4 sm:w-4.5 sm:h-4.5 -rotate-45 translate-x-[1px] -translate-y-[1px] text-white filter drop-shadow-md">
                 <path d="M3.478 2.404a.75.75 0 0 0-.926.941l2.432 7.917H13.5a.75.75 0 0 1 0 1.5H4.984l-2.432 7.917a.75.75 0 0 0 .926.941l18-8a.75.75 0 0 0 0-1.382l-18-8Z" />
               </svg>
             </button>

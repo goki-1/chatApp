@@ -36,50 +36,54 @@ export async function POST(req: Request) {
 
   console.log(`Stripe event received: ${event.type}`);
 
+  let userIdStr: string | undefined;
+  let creditsToBuyStr: string | undefined;
+
   if (event.type === "checkout.session.completed") {
     const session = event.data.object as Stripe.Checkout.Session;
-    const userIdStr = session.metadata?.userId;
-    const creditsToBuyStr = session.metadata?.creditsToBuy;
+    userIdStr = session.metadata?.userId;
+    creditsToBuyStr = session.metadata?.creditsToBuy;
+  } else if (event.type === "payment_intent.succeeded") {
+    const paymentIntent = event.data.object as Stripe.PaymentIntent;
+    userIdStr = paymentIntent.metadata?.userId;
+    creditsToBuyStr = paymentIntent.metadata?.creditsToBuy;
+  }
 
-    if (userIdStr && creditsToBuyStr) {
-      const userDbId = parseInt(userIdStr, 10);
-      const creditsToBuy = parseInt(creditsToBuyStr, 10);
+  if (userIdStr && creditsToBuyStr) {
+    const userDbId = parseInt(userIdStr, 10);
+    const creditsToBuy = parseInt(creditsToBuyStr, 10);
 
-      if (!isNaN(userDbId) && !isNaN(creditsToBuy) && creditsToBuy > 0) {
-        // Fetch current credits for the user
-        const { data: user, error: userError } = await (supabaseAdmin as any)
-          .from("users")
-          .select("credits")
-          .eq("id", userDbId)
-          .single();
+    if (!isNaN(userDbId) && !isNaN(creditsToBuy) && creditsToBuy > 0) {
+      // Fetch current credits for the user
+      const { data: user, error: userError } = await (supabaseAdmin as any)
+        .from("users")
+        .select("credits")
+        .eq("id", userDbId)
+        .single();
 
-        if (userError) {
-          console.error(`Error fetching user ${userDbId} for credit update:`, userError);
-          return new Response(`Database Error: ${userError.message}`, { status: 500 });
-        }
-
-        const currentCredits = user?.credits ?? 0;
-        const updatedCredits = currentCredits + creditsToBuy;
-
-        const customerId = typeof session.customer === "string" ? session.customer : session.customer?.id || null;
-
-        // Update user credits and stripe_customer_id in Supabase
-        const { error: updateError } = await (supabaseAdmin as any)
-          .from("users")
-          .update({
-            credits: updatedCredits,
-            stripe_customer_id: customerId,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", userDbId);
-
-        if (updateError) {
-          console.error(`Error updating credits for user ${userDbId}:`, updateError);
-          return new Response(`Database Update Error: ${updateError.message}`, { status: 500 });
-        }
-
-        console.log(`Successfully added ${creditsToBuy} credits to user ID ${userDbId}. New balance: ${updatedCredits}`);
+      if (userError) {
+        console.error(`Error fetching user ${userDbId} for credit update:`, userError);
+        return new Response(`Database Error: ${userError.message}`, { status: 500 });
       }
+
+      const currentCredits = user?.credits ?? 0;
+      const updatedCredits = currentCredits + creditsToBuy;
+
+      // Update user credits in Supabase
+      const { error: updateError } = await (supabaseAdmin as any)
+        .from("users")
+        .update({
+          credits: updatedCredits,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", userDbId);
+
+      if (updateError) {
+        console.error(`Error updating credits for user ${userDbId}:`, updateError);
+        return new Response(`Database Update Error: ${updateError.message}`, { status: 500 });
+      }
+
+      console.log(`Successfully added ${creditsToBuy} credits to user ID ${userDbId}. New balance: ${updatedCredits}`);
     }
   }
 

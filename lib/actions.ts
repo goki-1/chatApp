@@ -2,12 +2,11 @@
 
 import { currentUser } from "@clerk/nextjs/server";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
-import { getBotResponse } from "@/app/chatLogic";
 import Stripe from "stripe";
 
 /**
  * Syncs the currently authenticated Clerk user to the 'users' table in Supabase.
- * Maps Clerk fields to your database schema (clerk_id, email, full_name, last_seen_at, etc.).
+ * Maps Clerk fields to your database schema (clerk_id, email, full_name, etc.).
  * Returns the matched database row containing the database auto-incremented 'id' and 'credits'.
  */
 export async function syncUser() {
@@ -40,13 +39,12 @@ export async function syncUser() {
     let dbUser;
 
     if (existingUser) {
-      // User exists: Update details and last_seen_at
+      // User exists: Update details
       const { data, error: updateError } = await supabaseAdmin
         .from("users")
         .update({
           email: email,
           full_name: fullName,
-          last_seen_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         })
         .eq("clerk_id", user.id)
@@ -66,7 +64,7 @@ export async function syncUser() {
           clerk_id: user.id,
           email: email,
           full_name: fullName,
-          last_seen_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
         })
         .select()
         .single();
@@ -88,29 +86,47 @@ export async function syncUser() {
 /**
  * Fetches all message history for a user, using user_id foreign key.
  */
-export async function getMessages(userDbId: number) {
+/**
+ * Fetches message history for a user using user_id foreign key with 20-message pagination.
+ */
+export async function getMessages(
+  userDbId: number,
+  limit: number = 20,
+  beforeId?: number
+) {
   try {
-    const { data: messages, error } = await supabaseAdmin
+    let query = supabaseAdmin
       .from("messages")
       .select("id, sender_type, message_text, is_read, created_at")
       .eq("user_id", userDbId)
-      .order("created_at", { ascending: true });
+      .order("id", { ascending: false })
+      .limit(limit);
+
+    if (beforeId) {
+      query = query.lt("id", beforeId);
+    }
+
+    const { data: messages, error } = await query;
 
     if (error) {
       console.error("Error loading messages from Supabase:", error);
-      return { success: false, error: error.message };
+      return { success: false, error: error.message, messages: [], hasMore: false };
     }
 
-    return { success: true, messages };
+    const sorted = [...(messages || [])].reverse();
+    const hasMore = (messages || []).length === limit;
+
+    return { success: true, messages: sorted, hasMore };
   } catch (error: any) {
     console.error("Unhandled error loading messages:", error);
-    return { success: false, error: error.message || String(error) };
+    return { success: false, error: error.message || String(error), messages: [], hasMore: false };
   }
 }
 
 /**
- * Securely handles sending a user message, verifying credits, and generating bot reply.
- * Runs in a secure server-side context.
+ * Securely handles sending a user message into Supabase.
+ * Checks that credits > 0 before sending, but preserves credit balance
+ * so your external Mac backend handles deduction upon AI reply generation.
  */
 export async function sendMessageAction(userDbId: number, text: string) {
   try {
@@ -149,49 +165,12 @@ export async function sendMessageAction(userDbId: number, text: string) {
       return { success: false, error: userMsgError?.message || "Failed to save message" };
     }
 
-    // 3. Decrement user's credits by 1
-    const nextCredits = currentCredits - 1;
-    const { error: updateCreditsError } = await supabaseAdmin
-      .from("users")
-      .update({
-        credits: nextCredits,
-      })
-      .eq("id", userDbId);
-
-    if (updateCreditsError) {
-      console.error("Error updating user credits in Supabase:", updateCreditsError);
-      return { success: false, error: updateCreditsError.message };
-    }
-
-    // 4. Generate bot reply
-    const botReply = getBotResponse(text);
-
-    // 5. Insert Bot Message (Harnoor)
-    const { data: botMsg, error: botMsgError } = await supabaseAdmin
-      .from("messages")
-      .insert({
-        user_id: userDbId,
-        sender_type: "Harnoor",
-        message_text: botReply.text,
-        is_read: true,
-      })
-      .select("id, created_at")
-      .single();
-
-    if (botMsgError || !botMsg) {
-      console.error("Error saving bot message in Supabase:", botMsgError);
-      return { success: false, error: botMsgError?.message || "Failed to save bot response" };
-    }
-
+    // Credits are preserved so external Mac backend script handles credit deduction
     return {
       success: true,
-      updatedCredits: nextCredits,
+      updatedCredits: currentCredits,
       userMsgId: userMsg.id,
       userMsgCreatedAt: userMsg.created_at,
-      botMsgId: botMsg.id,
-      botMsgCreatedAt: botMsg.created_at,
-      botReply: botReply.text,
-      delayMs: botReply.delayMs,
     };
   } catch (error: any) {
     console.error("Unhandled error sending message:", error);
@@ -248,13 +227,13 @@ export async function getLastBotActiveTime() {
 
 /**
  * Creates a Stripe Checkout Session for purchasing credit packs.
- * Supports multi-currency pricing and enables UPI for INR transactions.
+ * Supports USD ($) and INR (₹) currencies (enables UPI for INR transactions).
  */
 export async function createCheckoutSession(
   userDbId: number,
   creditsTier: 50 | 100 | 200,
-  originUrl: string,
-  currencyCode: string = "cad"
+  returnUrl: string,
+  currencyCode: string = "usd"
 ) {
   try {
     const stripeSecretKey = process.env.STRIPE_SECRET_KEY || process.env.STRIPE_SECRET_KEY_L;
@@ -267,34 +246,29 @@ export async function createCheckoutSession(
       httpClient: Stripe.createFetchHttpClient(),
     });
 
-    const curr = currencyCode.toLowerCase();
-    let unitAmount = 300; // default CAD cents ($3.00)
+    const curr = currencyCode.toLowerCase() === "inr" ? "inr" : "usd";
+    let unitAmount = 299; // default USD cents ($2.99)
 
     if (curr === "inr") {
-      // 50 credits -> ₹200 INR (20000 paise)
-      // 100 credits -> ₹300 INR (30000 paise)
-      // 200 credits -> ₹500 INR (50000 paise)
-      if (creditsTier === 50) unitAmount = 20000;
-      if (creditsTier === 100) unitAmount = 30000;
-      if (creditsTier === 200) unitAmount = 50000;
-    } else if (curr === "usd") {
-      if (creditsTier === 50) unitAmount = 220;
-      if (creditsTier === 100) unitAmount = 370;
-      if (creditsTier === 200) unitAmount = 600;
-    } else if (curr === "eur") {
-      if (creditsTier === 50) unitAmount = 200;
-      if (creditsTier === 100) unitAmount = 340;
-      if (creditsTier === 200) unitAmount = 550;
-    } else if (curr === "gbp") {
-      if (creditsTier === 50) unitAmount = 175;
-      if (creditsTier === 100) unitAmount = 290;
-      if (creditsTier === 200) unitAmount = 470;
+      // 50 credits -> ₹199 INR (19900 paise)
+      // 100 credits -> ₹349 INR (34900 paise)
+      // 200 credits -> ₹549 INR (54900 paise)
+      if (creditsTier === 50) unitAmount = 19900;
+      if (creditsTier === 100) unitAmount = 34900;
+      if (creditsTier === 200) unitAmount = 54900;
     } else {
-      // CAD default
-      if (creditsTier === 50) unitAmount = 300;
-      if (creditsTier === 100) unitAmount = 500;
-      if (creditsTier === 200) unitAmount = 800;
+      // USD default
+      // 50 credits -> $2.99 USD (299 cents)
+      // 100 credits -> $4.99 USD (499 cents)
+      // 200 credits -> $7.99 USD (799 cents)
+      if (creditsTier === 50) unitAmount = 299;
+      if (creditsTier === 100) unitAmount = 499;
+      if (creditsTier === 200) unitAmount = 799;
     }
+
+    const connector = returnUrl.includes("?") ? "&" : "?";
+    const sessions = Math.floor(creditsTier / 50);
+    const sessionLabel = sessions === 1 ? "1 chat session" : `${sessions} chat sessions`;
 
     const sessionParams: Stripe.Checkout.SessionCreateParams = {
       line_items: [
@@ -303,7 +277,7 @@ export async function createCheckoutSession(
             currency: curr,
             product_data: {
               name: `${creditsTier} Backstage Chat Credits`,
-              description: `Refill pack for ${creditsTier} chat messages`,
+              description: `Refill credits. ${creditsTier} credits = ${sessionLabel}`,
             },
             unit_amount: unitAmount,
           },
@@ -311,8 +285,8 @@ export async function createCheckoutSession(
         },
       ],
       mode: "payment",
-      success_url: `${originUrl}?payment=success`,
-      cancel_url: `${originUrl}?payment=cancelled`,
+      success_url: `${returnUrl}${connector}payment=success`,
+      cancel_url: `${returnUrl}${connector}payment=cancelled`,
       metadata: {
         userId: String(userDbId),
         creditsToBuy: String(creditsTier),
@@ -324,6 +298,69 @@ export async function createCheckoutSession(
     return { success: true, url: session.url };
   } catch (error: any) {
     console.error("Error creating Stripe checkout session:", error);
+    return { success: false, error: error.message || String(error) };
+  }
+}
+
+/**
+ * Creates a Stripe PaymentIntent for embedded Express Checkout Elements (Apple Pay, Google Pay, Link).
+ */
+export async function createPaymentIntentAction(
+  userDbId: number,
+  creditsTier: 50 | 100 | 200,
+  currencyCode: string = "USD"
+) {
+  try {
+    const stripeSecretKey = process.env.STRIPE_SECRET_KEY || process.env.STRIPE_SECRET_KEY_L;
+    if (!stripeSecretKey) {
+      console.error("Missing STRIPE_SECRET_KEY in environment variables");
+      return { success: false, error: "Stripe configuration error" };
+    }
+
+    const stripe = new Stripe(stripeSecretKey, {
+      httpClient: Stripe.createFetchHttpClient(),
+    });
+
+    const curr = currencyCode.toLowerCase() === "inr" ? "inr" : "usd";
+    let unitAmount = 499; // Default 100 credits = $4.99 USD (499 cents)
+
+    if (curr === "inr") {
+      // 50 credits -> ₹199 (19900 paise)
+      // 100 credits -> ₹299 (29900 paise)
+      // 200 credits -> ₹499 (49900 paise)
+      if (creditsTier === 50) unitAmount = 19900;
+      if (creditsTier === 100) unitAmount = 29900;
+      if (creditsTier === 200) unitAmount = 49900;
+    } else {
+      // USD in cents
+      if (creditsTier === 50) unitAmount = 299;
+      if (creditsTier === 100) unitAmount = 499;
+      if (creditsTier === 200) unitAmount = 799;
+    }
+
+    const paymentIntent = await stripe.paymentIntents.create({
+      amount: unitAmount,
+      currency: curr,
+      automatic_payment_methods: { enabled: true },
+      metadata: {
+        userId: String(userDbId),
+        creditsToBuy: String(creditsTier),
+        currency: curr,
+        source: "express_checkout",
+      },
+    });
+
+    if (!paymentIntent.client_secret) {
+      return { success: false, error: "Failed to generate payment client secret" };
+    }
+
+    return {
+      success: true,
+      clientSecret: paymentIntent.client_secret,
+      paymentIntentId: paymentIntent.id,
+    };
+  } catch (error: any) {
+    console.error("Error creating Stripe PaymentIntent:", error);
     return { success: false, error: error.message || String(error) };
   }
 }

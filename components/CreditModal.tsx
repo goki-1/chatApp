@@ -1,6 +1,12 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
+import { loadStripe } from "@stripe/stripe-js";
+import { Elements, ExpressCheckoutElement, useStripe, useElements } from "@stripe/react-stripe-js";
+import { createPaymentIntentAction } from "@/lib/actions";
+
+const stripePublicKey = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY || "";
+const stripePromise = stripePublicKey ? loadStripe(stripePublicKey) : null;
 
 interface CreditModalProps {
   isOpen: boolean;
@@ -11,86 +17,160 @@ interface CreditModalProps {
   errorText?: string | null;
 }
 
+function ExpressCheckoutInner({
+  clientSecret,
+  onSuccess,
+  onError,
+}: {
+  clientSecret: string;
+  onSuccess: () => void;
+  onError: (err: string) => void;
+}) {
+  const stripe = useStripe();
+  const elements = useElements();
+
+  const handleConfirm = async () => {
+    if (!stripe || !elements) return;
+
+    try {
+      const { error } = await stripe.confirmPayment({
+        elements,
+        clientSecret,
+        confirmParams: {
+          return_url: `${window.location.origin}${window.location.pathname}?payment=success`,
+        },
+        redirect: "if_required",
+      });
+
+      if (error) {
+        onError(error.message || "Payment failed");
+      } else {
+        onSuccess();
+      }
+    } catch (err: any) {
+      onError(err?.message || "Express Checkout error");
+    }
+  };
+
+  return (
+    <div className="w-full">
+      <ExpressCheckoutElement
+        onConfirm={handleConfirm}
+        options={{
+          buttonHeight: 46,
+          buttonTheme: {
+            applePay: "black",
+            googlePay: "black",
+          },
+          wallets: {
+            applePay: "auto",
+            googlePay: "auto",
+          },
+        }}
+      />
+    </div>
+  );
+}
+
 export function CreditModal({ isOpen, onClose, userDbId, onCheckout, isLoading, errorText }: CreditModalProps) {
   const [selectedTier, setSelectedTier] = useState<50 | 100 | 200>(100);
-  const [currencySymbol, setCurrencySymbol] = useState("CAD $");
-  const [exchangeRate, setExchangeRate] = useState(1);
-  const [currencyCode, setCurrencyCode] = useState("CAD");
+  const [currencySymbol, setCurrencySymbol] = useState("$");
+  const [currencyCode, setCurrencyCode] = useState("USD");
+  const [clientSecret, setClientSecret] = useState<string | null>(null);
+  const [expressError, setExpressError] = useState<string | null>(null);
+  const [isPreparingExpress, setIsPreparingExpress] = useState(false);
 
   useEffect(() => {
-    // Basic local currency detection based on user timezone / browser locale
+    // Detect Indian timezone/locale vs global USD
     try {
       const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
-      const locale = navigator.language || "en-CA";
-
-      if (timeZone.includes("Calcutta") || timeZone.includes("Kolkata") || timeZone.includes("Asia/Kolkata")) {
+      if (timeZone.includes("Calcutta") || timeZone.includes("Kolkata") || timeZone.includes("Asia/Kolkata") || timeZone.includes("India")) {
         setCurrencySymbol("₹");
         setCurrencyCode("INR");
-        setExchangeRate(67.5);
-      } else if (timeZone.includes("America/New_York") || timeZone.includes("America/Los_Angeles") || timeZone.includes("America/Chicago")) {
+      } else {
         setCurrencySymbol("$");
         setCurrencyCode("USD");
-        setExchangeRate(0.74);
-      } else if (timeZone.includes("Europe/London")) {
-        setCurrencySymbol("£");
-        setCurrencyCode("GBP");
-        setExchangeRate(0.58);
-      } else if (timeZone.includes("Europe/Paris") || timeZone.includes("Europe/Berlin") || timeZone.includes("Europe/Rome")) {
-        setCurrencySymbol("€");
-        setCurrencyCode("EUR");
-        setExchangeRate(0.68);
-      } else {
-        setCurrencySymbol("CAD $");
-        setCurrencyCode("CAD");
-        setExchangeRate(1.0);
       }
     } catch {
-      setCurrencySymbol("CAD $");
-      setCurrencyCode("CAD");
-      setExchangeRate(1.0);
+      setCurrencySymbol("$");
+      setCurrencyCode("USD");
     }
   }, []);
 
+  // Fetch client secret for Express Checkout Element whenever tier or currency changes
+  useEffect(() => {
+    if (!isOpen || !userDbId || !stripePromise) return;
+
+    let isMounted = true;
+    setIsPreparingExpress(true);
+    setExpressError(null);
+
+    createPaymentIntentAction(userDbId, selectedTier, currencyCode)
+      .then((res) => {
+        if (!isMounted) return;
+        if (res.success && res.clientSecret) {
+          setClientSecret(res.clientSecret);
+        } else {
+          setClientSecret(null);
+        }
+      })
+      .catch((err) => {
+        console.error("Error creating PaymentIntent for Express Checkout:", err);
+      })
+      .finally(() => {
+        if (isMounted) setIsPreparingExpress(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [isOpen, userDbId, selectedTier, currencyCode]);
+
   if (!isOpen) return null;
+
+  const getDescription = (credits: number) => {
+    if (credits === 50) return "Great for quick catch-ups (1 session)";
+    if (credits === 100) {
+      const savePct = currencyCode === "INR" ? "25%" : "16%";
+      return `Save ${savePct} — Best for active chat (2 sessions)`;
+    }
+    if (credits === 200) {
+      const savePct = currencyCode === "INR" ? "37%" : "33%";
+      return `Save ${savePct} — Maximum savings (4 sessions)`;
+    }
+    return "";
+  };
 
   const tiers = [
     {
       credits: 50 as const,
-      cadPrice: 3,
+      usdPrice: 2.99,
       badge: null,
-      description: "Great for quick catch-ups",
     },
     {
       credits: 100 as const,
-      cadPrice: 5,
+      usdPrice: 4.99,
       badge: "MOST POPULAR",
-      description: "Save 16% — Best for active chat",
     },
     {
       credits: 200 as const,
-      cadPrice: 8,
+      usdPrice: 7.99,
       badge: "BEST VALUE",
-      description: "Save 33% — Maximum savings",
     },
   ];
 
-  const formatPrice = (cadPrice: number, credits: number) => {
+  const formatPrice = (usdPrice: number, credits: number) => {
     if (currencyCode === "INR") {
-      if (credits === 50) return "₹200";
-      if (credits === 100) return "₹300";
-      if (credits === 200) return "₹500";
-      return `₹${Math.round(cadPrice * exchangeRate)}`;
+      if (credits === 50) return "₹199";
+      if (credits === 100) return "₹299";
+      if (credits === 200) return "₹499";
     }
-    if (currencyCode === "CAD") {
-      return `$${cadPrice.toFixed(2)} CAD`;
-    }
-    const converted = (cadPrice * exchangeRate).toFixed(2);
-    return `${currencySymbol}${converted} ${currencyCode}`;
+    return `$${usdPrice.toFixed(2)}`;
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fadeIn">
-      <div className="relative w-full max-w-lg bg-white dark:bg-[#121212] border border-stone-200 dark:border-stone-800 rounded-3xl p-6 sm:p-8 shadow-2xl transition-all">
+      <div className="relative w-full max-w-lg bg-white dark:bg-[#121212] border border-stone-200 dark:border-stone-800 rounded-3xl p-6 sm:p-8 shadow-2xl transition-all max-h-[90vh] overflow-y-auto">
         {/* Close Button */}
         <button
           onClick={onClose}
@@ -110,7 +190,7 @@ export function CreditModal({ isOpen, onClose, userDbId, onCheckout, isLoading, 
             Choose a Credit Pack
           </h2>
           <p className="text-xs text-stone-500 dark:text-stone-400 mt-1">
-            Unlock uninterrupted access with Harnoor. Auto-converted on Stripe Checkout.
+            Unlock uninterrupted access with Harnoor. Auto-converted on Checkout.
           </p>
         </div>
 
@@ -149,14 +229,14 @@ export function CreditModal({ isOpen, onClose, userDbId, onCheckout, isLoading, 
                       {t.credits} Credits
                     </span>
                     <span className="text-[11px] text-stone-500 dark:text-stone-400">
-                      {t.description}
+                      {getDescription(t.credits)}
                     </span>
                   </div>
                 </div>
 
                 <div className="text-right">
                   <span className="font-bold text-sm text-stone-950 dark:text-stone-50">
-                    {formatPrice(t.cadPrice, t.credits)}
+                    {formatPrice(t.usdPrice, t.credits)}
                   </span>
                 </div>
               </div>
@@ -164,17 +244,61 @@ export function CreditModal({ isOpen, onClose, userDbId, onCheckout, isLoading, 
           })}
         </div>
 
-        {errorText && (
+        {(errorText || expressError) && (
           <div className="mb-4 text-xs text-red-600 dark:text-red-400 font-medium px-4 py-2.5 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/40 rounded-2xl text-center">
-            {errorText}
+            {errorText || expressError}
           </div>
         )}
 
-        {/* Action Button */}
+        {/* Embedded Stripe Express Checkout Element (Apple Pay, Google Pay, Link) */}
+        {clientSecret && stripePromise && (
+          <div className="mb-4">
+            <div className="flex items-center gap-2 mb-2.5">
+              <span className="text-[10px] font-semibold text-stone-400 dark:text-stone-500 uppercase tracking-widest">
+                ⚡ Instant 1-Click Pay
+              </span>
+              <div className="h-px flex-1 bg-stone-200 dark:bg-stone-800" />
+            </div>
+
+            <Elements
+              key={clientSecret}
+              stripe={stripePromise}
+              options={{
+                clientSecret,
+                appearance: {
+                  theme: "night",
+                  variables: {
+                    colorPrimary: "#8f6d3d",
+                    borderRadius: "16px",
+                  },
+                },
+              }}
+            >
+              <ExpressCheckoutInner
+                clientSecret={clientSecret}
+                onSuccess={() => {
+                  window.location.href = `${window.location.origin}${window.location.pathname}?payment=success`;
+                }}
+                onError={(err) => setExpressError(err)}
+              />
+            </Elements>
+
+            <div className="relative my-4 flex items-center justify-center">
+              <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t border-stone-200 dark:border-stone-800" />
+              </div>
+              <span className="relative bg-white dark:bg-[#121212] px-3 text-[10px] text-stone-400 dark:text-stone-500 uppercase tracking-wider">
+                Or pay with Card / NetBanking
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Standard Hosted Checkout Button */}
         <button
           disabled={isLoading || !userDbId}
           onClick={() => onCheckout(selectedTier, currencyCode)}
-          className="w-full py-3.5 px-6 rounded-full bg-[#8f6d3d] hover:bg-[#7a5c32] text-white font-medium text-sm tracking-wide transition-all duration-200 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed shadow-md hover:shadow-lg flex items-center justify-center gap-2"
+          className="w-full py-3.5 px-6 rounded-full bg-[#8f6d3d] hover:bg-[#7a5c32] text-white font-medium text-sm tracking-wide transition-all duration-200 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed shadow-md hover:shadow-lg flex items-center justify-center gap-2 cursor-pointer"
         >
           {isLoading ? (
             <>
@@ -185,7 +309,7 @@ export function CreditModal({ isOpen, onClose, userDbId, onCheckout, isLoading, 
               <span>Redirecting to Stripe...</span>
             </>
           ) : (
-            <span>Proceed to Payment</span>
+            <span>Proceed to Standard Checkout</span>
           )}
         </button>
 

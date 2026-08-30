@@ -64,11 +64,12 @@ export default function Home() {
     }
   }, [authLoaded, userId, userLoaded, user]);
 
-  const handleCheckout = async (creditsTier: 50 | 100 | 200, currencyCode: string = "cad") => {
+  const handleCheckout = async (creditsTier: 50 | 100 | 200, currencyCode: string = "usd") => {
     if (!userDbId) return;
     setIsCheckoutLoading(true);
     try {
-      const res = await createCheckoutSession(userDbId, creditsTier, window.location.origin, currencyCode);
+      const currentUrl = window.location.origin + window.location.pathname;
+      const res = await createCheckoutSession(userDbId, creditsTier, currentUrl, currencyCode);
       if (res.success && res.url) {
         window.location.href = res.url;
       } else {
@@ -140,12 +141,12 @@ export default function Home() {
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-            {/* Active Member Card: Harnoor V. */}
+            {/* Active Member Card: Harnoor K. */}
             <div className="group relative bg-white dark:bg-[#121212] border border-stone-200 dark:border-stone-850 rounded-3xl p-6 shadow-sm hover:shadow-xl hover:border-[#8f6d3d]/50 transition-all duration-300 flex flex-col justify-between">
               <div className="space-y-4">
                 <div className="flex justify-between items-start">
                   <div className="relative w-14 h-14 rounded-2xl overflow-hidden border border-stone-200 dark:border-stone-800 bg-[#8f6d3d]/10 flex items-center justify-center">
-                    <img src="/harnoor.jpg" alt="Harnoor V." className="w-full h-full object-cover object-top" />
+                    <img src="/harnoor.jpg" alt="Harnoor K." className="w-full h-full object-cover object-top" />
                   </div>
                   <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200/50 dark:border-emerald-900/50">
                     <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
@@ -157,7 +158,7 @@ export default function Home() {
 
                 <div>
                   <h3 className="text-lg font-semibold text-stone-900 dark:text-stone-100 group-hover:text-[#8f6d3d] transition-colors">
-                    Harnoor V.
+                    Harnoor K.
                   </h3>
                   <p className="text-xs text-[#8f6d3d] font-medium mt-0.5">
                     Instagram Inflencer
@@ -243,62 +244,7 @@ export default function Home() {
           </div>
         </section>
 
-        {/* Pricing / Refill Section */}
-        <section className="bg-white dark:bg-[#121212] border border-stone-200 dark:border-stone-850 rounded-3xl p-6 sm:p-8 space-y-6">
-          <div className="text-center max-w-xl mx-auto space-y-2">
-            <span className="text-[10px] uppercase tracking-[0.25em] text-[#8f6d3d] font-semibold">
-              Credit Refill Packs
-            </span>
-            <h2 className="text-2xl font-serif font-medium text-stone-900 dark:text-stone-100">
-              Refill Your Chat Credits
-            </h2>
-            <p className="text-xs text-stone-500 dark:text-stone-400">
-              Each sent message uses 1 credit. New accounts start with 10 free credits.
-            </p>
-          </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 max-w-3xl mx-auto">
-            <div className="border border-stone-200 dark:border-stone-800 rounded-2xl p-5 text-center space-y-3 bg-stone-50/50 dark:bg-stone-900/30">
-              <span className="text-xs font-semibold text-stone-500 uppercase tracking-wider">Starter</span>
-              <div className="text-2xl font-bold text-stone-900 dark:text-stone-100">50 Credits</div>
-              <p className="text-xs text-stone-500">$3.00 CAD (~₹180)</p>
-            </div>
-            <div className="border-2 border-[#8f6d3d] rounded-2xl p-5 text-center space-y-3 bg-[#8f6d3d]/5 relative">
-              <span className="absolute -top-3 left-1/2 -translate-x-1/2 bg-[#8f6d3d] text-white text-[9px] font-semibold tracking-wider px-3 py-0.5 rounded-full uppercase">
-                Most Popular
-              </span>
-              <span className="text-xs font-semibold text-[#8f6d3d] uppercase tracking-wider">Popular</span>
-              <div className="text-2xl font-bold text-stone-900 dark:text-stone-100">100 Credits</div>
-              <p className="text-xs text-stone-500">$5.00 CAD (~₹300)</p>
-            </div>
-            <div className="border border-stone-200 dark:border-stone-800 rounded-2xl p-5 text-center space-y-3 bg-stone-50/50 dark:bg-stone-900/30">
-              <span className="text-xs font-semibold text-emerald-600 uppercase tracking-wider">Best Value</span>
-              <div className="text-2xl font-bold text-stone-900 dark:text-stone-100">200 Credits</div>
-              <p className="text-xs text-stone-500">$8.00 CAD (~₹500)</p>
-            </div>
-          </div>
-
-          <div className="text-center pt-2">
-            {authLoaded && userId ? (
-              <button
-                onClick={() => setIsCreditModalOpen(true)}
-                className="py-3 px-8 rounded-full bg-[#8f6d3d] hover:bg-[#7a5c32] text-white font-medium text-sm transition-all duration-200 active:scale-95 shadow-md inline-flex items-center gap-2"
-              >
-                <span>Refill Credits Now</span>
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-                </svg>
-              </button>
-            ) : (
-              <button
-                onClick={() => clerk.openSignIn()}
-                className="py-3 px-8 rounded-full bg-[#8f6d3d] hover:bg-[#7a5c32] text-white font-medium text-sm transition-all duration-200 active:scale-95 shadow-md"
-              >
-                Sign In to View Credits
-              </button>
-            )}
-          </div>
-        </section>
       </div>
 
       <CreditModal
