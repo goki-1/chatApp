@@ -654,25 +654,31 @@ export default function HarnoorPage() {
               <button type="button" onClick={() => setIsCreditModalOpen(true)} className="underline text-[#8f6d3d] font-bold ml-2">Refill Now</button>
             </div>
           )}
-          <div className="flex items-center bg-stone-100/90 dark:bg-stone-900/90 rounded-full px-3.5 py-2 sm:px-4 sm:py-2.5 border-2 border-[#8f6d3d]/70 dark:border-[#c4a06d]/80 focus-within:border-[#8f6d3d] dark:focus-within:border-[#c4a06d] focus-within:ring-4 focus-within:ring-[#8f6d3d]/30 shadow-[0_0_15px_rgba(196,160,109,0.2)] transition-all">
-            <input
-              ref={inputRef}
-              type="text"
+          <div className="flex items-center bg-stone-100/90 dark:bg-stone-900/90 rounded-full px-3.5 py-1.5 sm:px-4 sm:py-2 border-2 border-[#8f6d3d]/70 dark:border-[#c4a06d]/80 focus-within:border-[#8f6d3d] dark:focus-within:border-[#c4a06d] focus-within:ring-4 focus-within:ring-[#8f6d3d]/30 shadow-[0_0_15px_rgba(196,160,109,0.2)] transition-all">
+            <textarea
+              ref={inputRef as any}
+              rows={1}
               name="chat_message"
               id="chat-message-input"
               value={input}
               onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSend();
+                }
+              }}
               placeholder="Type your message..."
               autoComplete="off"
               autoCorrect="on"
               autoCapitalize="sentences"
-              spellCheck="true"
+              spellCheck={true}
               enterKeyHint="send"
               data-form-type="other"
               data-lpignore="true"
               data-1p-ignore="true"
               aria-autocomplete="none"
-              className="flex-1 bg-transparent border-none outline-none text-sm text-stone-800 dark:text-stone-100 focus:placeholder-transparent placeholder-stone-400 px-2"
+              className="flex-1 bg-transparent border-none outline-none text-sm text-stone-800 dark:text-stone-100 focus:placeholder-transparent placeholder-stone-400 px-2 resize-none max-h-24 py-1 leading-normal"
             />
             <button
               type="submit"
