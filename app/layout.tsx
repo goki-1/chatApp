@@ -1,4 +1,4 @@
-import type { Metadata } from 'next'
+import type { Metadata, Viewport } from 'next'
 import { ClerkProvider, Show, SignInButton, SignUpButton, UserButton } from '@clerk/nextjs'
 import { Geist, Geist_Mono } from 'next/font/google'
 import './globals.css'
@@ -18,17 +18,25 @@ export const metadata: Metadata = {
   description: 'Chat anything fun',
 }
 
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+  interactiveWidget: 'resizes-content',
+}
+
 export default function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode
 }>) {
   return (
-    <html lang="en">
-      <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
+    <html lang="en" className="h-full overscroll-none">
+      <body className={`${geistSans.variable} ${geistMono.variable} antialiased h-[100dvh] max-h-[100dvh] flex flex-col overflow-hidden overscroll-none`}>
         <ClerkProvider>
-          <header className="flex flex-wrap sm:flex-nowrap justify-between items-center px-4 pt-6 pb-3 sm:py-4 sm:px-6 gap-3 sm:gap-4 border-b border-stone-200/40 dark:border-stone-900/40 bg-white/60 dark:bg-black/60 backdrop-blur-md sticky top-0 z-40">
-            <h1 className="text-base sm:text-xl uppercase tracking-[0.18em] sm:tracking-[0.25em] text-[#8f6d3d] dark:text-[#c4a06d] font-semibold shrink-0">
+          <header className="shrink-0 flex justify-between items-center px-4 py-2.5 sm:py-3.5 sm:px-6 border-b border-stone-200/40 dark:border-stone-900/40 bg-white/70 dark:bg-black/70 backdrop-blur-md z-40">
+            <h1 className="text-sm sm:text-lg uppercase tracking-[0.18em] sm:tracking-[0.25em] text-[#8f6d3d] dark:text-[#c4a06d] font-semibold shrink-0">
               Backstage Chat.me
             </h1>
             <div className="flex items-center gap-2 sm:gap-3">

@@ -83,6 +83,24 @@ export default function HarnoorPage() {
   const [hasMoreMessages, setHasMoreMessages] = useState(false);
   const [isLoadingEarlier, setIsLoadingEarlier] = useState(false);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Auto-scroll messages into view when mobile keyboard resizes viewport
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.visualViewport) return;
+
+    const onViewportChange = () => {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    };
+
+    window.visualViewport.addEventListener("resize", onViewportChange);
+    window.visualViewport.addEventListener("scroll", onViewportChange);
+
+    return () => {
+      window.visualViewport?.removeEventListener("resize", onViewportChange);
+      window.visualViewport?.removeEventListener("scroll", onViewportChange);
+    };
+  }, []);
 
   // Stripe Payment & Refill Modal states
   const [isCreditModalOpen, setIsCreditModalOpen] = useState(false);
@@ -282,6 +300,9 @@ export default function HarnoorPage() {
           if (record && typeof record.ai_typing === "boolean") {
             setIsTyping(record.ai_typing);
           }
+          if (record && typeof record.credits === "number") {
+            setCredits(record.credits);
+          }
         }
       )
       .subscribe();
@@ -344,8 +365,8 @@ export default function HarnoorPage() {
   };
 
   // Handle message window form submit (signed in)
-  const handleSend = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSend = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     if (!input.trim() || !userDbId) return;
 
     // Check credits before sending
@@ -358,6 +379,9 @@ export default function HarnoorPage() {
 
     const userText = input;
     setInput("");
+
+    // Keep focus so the mobile keyboard never dismisses on send!
+    inputRef.current?.focus();
 
     // Optimistically update the UI with user's message
     const tempUserMsgId = "temp-" + Date.now();
@@ -453,10 +477,21 @@ export default function HarnoorPage() {
           </div>
 
           {/* Compact Guest Input Form */}
-          <form onSubmit={handleLandingSubmit} className="p-4 sm:p-5 bg-white/90 dark:bg-[#121212]/90">
+          <form onSubmit={handleLandingSubmit} autoComplete="off" data-form-type="other" className="p-4 sm:p-5 bg-white/90 dark:bg-[#121212]/90">
             <div className="flex items-center bg-stone-100/90 dark:bg-stone-900/90 rounded-full px-4 py-2.5 border-2 border-[#8f6d3d]/70 dark:border-[#c4a06d]/80 focus-within:border-[#8f6d3d] dark:focus-within:border-[#c4a06d] focus-within:ring-4 focus-within:ring-[#8f6d3d]/30 shadow-[0_0_15px_rgba(196,160,109,0.2)] transition-all">
               <input
                 type="text"
+                name="guest_chat_message"
+                id="guest-chat-message-input"
+                autoComplete="off"
+                autoCorrect="on"
+                autoCapitalize="sentences"
+                spellCheck="true"
+                enterKeyHint="send"
+                data-form-type="other"
+                data-lpignore="true"
+                data-1p-ignore="true"
+                aria-autocomplete="none"
                 value={landingInput}
                 onChange={(e) => setLandingInput(e.target.value)}
                 placeholder="Type your message to Harnoor..."
@@ -484,7 +519,7 @@ export default function HarnoorPage() {
   // Signed In Active Chat View
   return (
     <main
-      className="relative w-full h-[calc(100vh-4rem)] bg-[#F5F2EB] dark:bg-[#050505] text-stone-900 dark:text-stone-100 flex flex-col overflow-hidden"
+      className="relative w-full flex-1 min-h-0 bg-[#F5F2EB] dark:bg-[#050505] text-stone-900 dark:text-stone-100 flex flex-col overflow-hidden overscroll-none"
       data-conversation-type={currentConversationType ?? undefined}
     >
       {/* Apple-Style Glassmorphic Studio Mesh Backdrop */}
@@ -497,11 +532,11 @@ export default function HarnoorPage() {
       </div>
 
       {/* Full Screen Chat Sandbox / Message Window */}
-      <div className="relative z-10 w-full h-full bg-white/60 dark:bg-[#0c0c0c]/60 backdrop-blur-2xl flex flex-col justify-between">
+      <div className="relative z-10 w-full h-full bg-white/60 dark:bg-[#0c0c0c]/60 backdrop-blur-2xl flex flex-col justify-between overflow-hidden">
         {/* Contact Status Bar */}
-        <div className="flex justify-between items-center px-6 py-4 border-b border-stone-100 dark:border-stone-900 bg-stone-50/20 dark:bg-black/20">
+        <div className="shrink-0 flex justify-between items-center px-4 sm:px-6 py-2 sm:py-3 border-b border-stone-100 dark:border-stone-900 bg-stone-50/40 dark:bg-black/40 backdrop-blur-sm">
           <div className="flex items-center gap-3">
-            <div className="relative w-10 h-10 rounded-full overflow-hidden border border-stone-200 dark:border-stone-850">
+            <div className="relative w-9 h-9 sm:w-10 sm:h-10 rounded-full overflow-hidden border border-stone-200 dark:border-stone-850">
               <img src="/harnoor.jpg" alt="Harnoor K." className="w-full h-full object-cover object-top" />
             </div>
             <div className="flex flex-col text-left">
@@ -532,8 +567,8 @@ export default function HarnoorPage() {
           </div>
         </div>
 
-        {/* Message List - Full Screen Height */}
-        <div ref={scrollContainerRef} className="flex-1 overflow-y-auto py-6 px-6 space-y-4">
+        {/* Message List - Dynamic Scrollable */}
+        <div ref={scrollContainerRef} className="flex-1 min-h-0 overflow-y-auto overscroll-contain py-4 px-4 sm:px-6 space-y-3">
           {hasMoreMessages && (
             <div className="flex justify-center pb-2">
               <button
@@ -554,7 +589,7 @@ export default function HarnoorPage() {
               } space-y-1`}
             >
               <div
-                className={`max-w-[75%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed ${
+                className={`max-w-[78%] sm:max-w-[75%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed ${
                   msg.sender === "user"
                     ? "bg-[#8f6d3d] text-white rounded-br-none shadow-sm"
                     : "bg-stone-200/90 text-stone-900 dark:bg-stone-800/95 dark:text-stone-50 rounded-bl-none border border-stone-300 dark:border-stone-700/80 shadow-xs font-medium"
@@ -601,31 +636,55 @@ export default function HarnoorPage() {
         </div>
 
         {/* Active Message Input Form */}
-        <form onSubmit={handleSend} className="p-6 border-t border-stone-100 dark:border-stone-900 bg-white dark:bg-[#0f0f0f]">
+        <form
+          onSubmit={handleSend}
+          autoComplete="off"
+          data-form-type="other"
+          className="shrink-0 p-2.5 sm:p-4 border-t border-stone-100 dark:border-stone-900 bg-white/95 dark:bg-[#0f0f0f]/95 backdrop-blur-md pb-[max(0.6rem,env(safe-area-inset-bottom))]"
+        >
           {paymentNotice && (
-            <div className="mb-3 text-xs text-emerald-700 dark:text-emerald-300 font-medium px-4 py-2 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900/40 rounded-2xl flex justify-between items-center">
+            <div className="mb-2 text-xs text-emerald-700 dark:text-emerald-300 font-medium px-3.5 py-1.5 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900/40 rounded-2xl flex justify-between items-center">
               <span>{paymentNotice}</span>
               <button type="button" onClick={() => setPaymentNotice(null)} className="text-emerald-500 hover:text-emerald-700 ml-2">✕</button>
             </div>
           )}
           {creditsError && (
-            <div className="mb-3 text-xs text-red-600 dark:text-red-400 font-semibold px-4 py-2 bg-red-50 dark:bg-red-950/20 border border-red-200/50 dark:border-red-900/30 rounded-2xl text-center flex justify-between items-center">
+            <div className="mb-2 text-xs text-red-600 dark:text-red-400 font-semibold px-3.5 py-1.5 bg-red-50 dark:bg-red-950/20 border border-red-200/50 dark:border-red-900/30 rounded-2xl text-center flex justify-between items-center">
               <span>{creditsError}</span>
               <button type="button" onClick={() => setIsCreditModalOpen(true)} className="underline text-[#8f6d3d] font-bold ml-2">Refill Now</button>
             </div>
           )}
-          <div className="flex items-center bg-stone-100/90 dark:bg-stone-900/90 rounded-full px-4 py-2.5 border-2 border-[#8f6d3d]/70 dark:border-[#c4a06d]/80 focus-within:border-[#8f6d3d] dark:focus-within:border-[#c4a06d] focus-within:ring-4 focus-within:ring-[#8f6d3d]/30 shadow-[0_0_15px_rgba(196,160,109,0.2)] transition-all">
+          <div className="flex items-center bg-stone-100/90 dark:bg-stone-900/90 rounded-full px-3.5 py-2 sm:px-4 sm:py-2.5 border-2 border-[#8f6d3d]/70 dark:border-[#c4a06d]/80 focus-within:border-[#8f6d3d] dark:focus-within:border-[#c4a06d] focus-within:ring-4 focus-within:ring-[#8f6d3d]/30 shadow-[0_0_15px_rgba(196,160,109,0.2)] transition-all">
             <input
+              ref={inputRef}
               type="text"
+              name="chat_message"
+              id="chat-message-input"
               value={input}
               onChange={(e) => setInput(e.target.value)}
               placeholder="Type your message..."
+              autoComplete="off"
+              autoCorrect="on"
+              autoCapitalize="sentences"
+              spellCheck="true"
+              enterKeyHint="send"
+              data-form-type="other"
+              data-lpignore="true"
+              data-1p-ignore="true"
+              aria-autocomplete="none"
               className="flex-1 bg-transparent border-none outline-none text-sm text-stone-800 dark:text-stone-100 focus:placeholder-transparent placeholder-stone-400 px-2"
             />
             <button
               type="submit"
               disabled={!input.trim()}
-              className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-gradient-to-tr from-[#9e7a44] via-[#b59052] to-[#d4af37] text-white flex items-center justify-center disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-200 hover:scale-105 active:scale-95 shadow-md shadow-[#9e7a44]/40 hover:shadow-lg cursor-pointer ml-2 shrink-0"
+              onMouseDown={(e) => e.preventDefault()}
+              onTouchStart={(e) => {
+                if (input.trim()) {
+                  e.preventDefault();
+                  handleSend();
+                }
+              }}
+              className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-gradient-to-tr from-[#9e7a44] via-[#b59052] to-[#d4af37] text-white flex items-center justify-center disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-200 hover:scale-105 active:scale-95 shadow-md shadow-[#9e7a44]/40 hover:shadow-lg cursor-pointer ml-1.5 shrink-0"
             >
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4 sm:w-4.5 sm:h-4.5 -rotate-45 translate-x-[1px] -translate-y-[1px] text-white filter drop-shadow-md">
                 <path d="M3.478 2.404a.75.75 0 0 0-.926.941l2.432 7.917H13.5a.75.75 0 0 1 0 1.5H4.984l-2.432 7.917a.75.75 0 0 0 .926.941l18-8a.75.75 0 0 0 0-1.382l-18-8Z" />

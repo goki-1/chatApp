@@ -83,7 +83,7 @@ export default function Home() {
   };
 
   return (
-    <main className="w-full min-h-[calc(100vh-4rem)] bg-[#FAF8F5] text-stone-900 dark:bg-[#070707] dark:text-stone-100 px-4 py-8 sm:px-8 sm:py-12 flex flex-col items-center">
+    <main className="w-full flex-1 min-h-0 overflow-y-auto bg-[#FAF8F5] text-stone-900 dark:bg-[#070707] dark:text-stone-100 px-4 py-8 sm:px-8 sm:py-12 flex flex-col items-center">
       <div className="max-w-5xl w-full space-y-12">
         {/* Payment Notice Banner */}
         {paymentNotice && (
