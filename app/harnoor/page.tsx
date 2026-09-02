@@ -382,6 +382,12 @@ export default function HarnoorPage() {
 
     // Keep focus so the mobile keyboard never dismisses on send!
     inputRef.current?.focus();
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+    });
+    setTimeout(() => {
+      inputRef.current?.focus();
+    }, 50);
 
     // Optimistically update the UI with user's message
     const tempUserMsgId = "temp-" + Date.now();
@@ -681,16 +687,27 @@ export default function HarnoorPage() {
               className="flex-1 bg-transparent border-none outline-none text-sm text-stone-800 dark:text-stone-100 focus:placeholder-transparent placeholder-stone-400 px-2 resize-none max-h-24 py-1 leading-normal"
             />
             <button
-              type="submit"
-              disabled={!input.trim()}
+              type="button"
+              onPointerDown={(e) => e.preventDefault()}
               onMouseDown={(e) => e.preventDefault()}
-              onTouchStart={(e) => {
+              onTouchEnd={(e) => {
+                e.preventDefault();
                 if (input.trim()) {
-                  e.preventDefault();
                   handleSend();
                 }
               }}
-              className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-gradient-to-tr from-[#9e7a44] via-[#b59052] to-[#d4af37] text-white flex items-center justify-center disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-200 hover:scale-105 active:scale-95 shadow-md shadow-[#9e7a44]/40 hover:shadow-lg cursor-pointer ml-1.5 shrink-0"
+              onClick={(e) => {
+                e.preventDefault();
+                if (input.trim()) {
+                  handleSend();
+                }
+              }}
+              aria-label="Send message"
+              className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-gradient-to-tr from-[#9e7a44] via-[#b59052] to-[#d4af37] text-white flex items-center justify-center transition-all duration-200 shadow-md shadow-[#9e7a44]/40 hover:shadow-lg ml-1.5 shrink-0 ${
+                !input.trim()
+                  ? "opacity-30 cursor-not-allowed pointer-events-none"
+                  : "hover:scale-105 active:scale-95 cursor-pointer"
+              }`}
             >
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4 sm:w-4.5 sm:h-4.5 -rotate-45 translate-x-[1px] -translate-y-[1px] text-white filter drop-shadow-md">
                 <path d="M3.478 2.404a.75.75 0 0 0-.926.941l2.432 7.917H13.5a.75.75 0 0 1 0 1.5H4.984l-2.432 7.917a.75.75 0 0 0 .926.941l18-8a.75.75 0 0 0 0-1.382l-18-8Z" />
