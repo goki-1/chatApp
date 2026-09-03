@@ -574,7 +574,7 @@ export default function HarnoorPage() {
         </div>
 
         {/* Message List - Dynamic Scrollable */}
-        <div ref={scrollContainerRef} className="flex-1 min-h-0 overflow-y-auto overscroll-contain py-4 px-4 sm:px-6 space-y-3">
+        <div ref={scrollContainerRef} className="flex-1 min-h-0 overflow-y-auto overscroll-contain py-3 px-2.5 sm:px-5 space-y-2.5">
           {hasMoreMessages && (
             <div className="flex justify-center pb-2">
               <button
@@ -590,39 +590,45 @@ export default function HarnoorPage() {
           {messages.map((msg) => (
             <div
               key={msg.id}
-              className={`flex flex-col ${
-                msg.sender === "user" ? "items-end" : "items-start"
-              } space-y-1`}
+              className={`flex ${
+                msg.sender === "user" ? "justify-end" : "justify-start"
+              }`}
             >
               <div
-                className={`max-w-[78%] sm:max-w-[75%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed ${
+                className={`max-w-[82%] sm:max-w-[75%] px-3 pt-1.5 pb-1.5 rounded-2xl text-[13.5px] leading-snug break-words ${
                   msg.sender === "user"
-                    ? "bg-[#8f6d3d] text-white rounded-br-none shadow-sm"
-                    : "bg-stone-200/90 text-stone-900 dark:bg-stone-800/95 dark:text-stone-50 rounded-bl-none border border-stone-300 dark:border-stone-700/80 shadow-xs font-medium"
+                    ? "bg-[#8f6d3d] text-white rounded-br-xs shadow-xs"
+                    : "bg-stone-200/90 text-stone-900 dark:bg-stone-800/95 dark:text-stone-50 rounded-bl-xs border border-stone-300/80 dark:border-stone-700/80 shadow-xs font-medium"
                 }`}
               >
-                {msg.text}
-              </div>
-              <div className="flex items-center gap-1">
-                {msg.timestamp && (
-                  <span className="text-[10px] text-stone-400 dark:text-stone-600 px-1 font-mono">
-                    {msg.timestamp}
-                  </span>
-                )}
-                {/* Ticks for user messages */}
-                {msg.sender === "user" && msg.status && (
-                  <span className="text-[10px] opacity-80 leading-none">
-                    {msg.status === "sent" && (
-                      <span className="text-stone-400" title="Sent">✓</span>
-                    )}
-                    {msg.status === "delivered" && (
-                      <span className="text-stone-400 font-bold" title="Delivered">✓✓</span>
-                    )}
-                    {msg.status === "read" && (
-                      <span className="text-sky-500 font-bold" title="Read">✓✓</span>
-                    )}
-                  </span>
-                )}
+                <span>{msg.text}</span>
+                <span className="inline-flex items-center gap-0.5 float-right ml-2.5 mt-2.5 -mb-0.5 select-none shrink-0">
+                  {msg.timestamp && (
+                    <span
+                      className={`text-[8px] sm:text-[8.5px] tracking-tight leading-none ${
+                        msg.sender === "user"
+                          ? "text-amber-100/70"
+                          : "text-stone-500 dark:text-stone-400"
+                      }`}
+                    >
+                      {msg.timestamp.replace(/\s+/g, "\u2009")}
+                    </span>
+                  )}
+                  {/* Ticks for user messages */}
+                  {msg.sender === "user" && msg.status && (
+                    <span className="leading-none inline-flex items-center ml-0.5 text-[7.5px] sm:text-[8px]">
+                      {msg.status === "sent" && (
+                        <span className="text-amber-100/70" title="Sent">✓</span>
+                      )}
+                      {msg.status === "delivered" && (
+                        <span className="text-amber-100/90 font-bold" title="Delivered">✓✓</span>
+                      )}
+                      {msg.status === "read" && (
+                        <span className="text-sky-300 font-bold" title="Read">✓✓</span>
+                      )}
+                    </span>
+                  )}
+                </span>
               </div>
             </div>
           ))}
