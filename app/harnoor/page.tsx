@@ -595,7 +595,7 @@ export default function HarnoorPage() {
               }`}
             >
               <div
-                className={`max-w-[82%] sm:max-w-[75%] px-3 pt-1.5 pb-1.5 rounded-2xl text-[13.5px] leading-snug break-words ${
+                className={`max-w-[82%] sm:max-w-[75%] px-3 pt-1.5 pb-1.5 rounded-2xl text-[14.5px] sm:text-[15px] leading-snug break-words ${
                   msg.sender === "user"
                     ? "bg-[#8f6d3d] text-white rounded-br-xs shadow-xs"
                     : "bg-stone-200/90 text-stone-900 dark:bg-stone-800/95 dark:text-stone-50 rounded-bl-xs border border-stone-300/80 dark:border-stone-700/80 shadow-xs font-medium"
