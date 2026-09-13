@@ -485,14 +485,14 @@ export default function HarnoorPage() {
           {/* Compact Guest Input Form */}
           <form onSubmit={handleLandingSubmit} autoComplete="off" data-form-type="other" className="p-4 sm:p-5 bg-white/90 dark:bg-[#121212]/90">
             <div className="flex items-center bg-stone-100/90 dark:bg-stone-900/90 rounded-full px-4 py-2.5 border-2 border-[#8f6d3d]/70 dark:border-[#c4a06d]/80 focus-within:border-[#8f6d3d] dark:focus-within:border-[#c4a06d] focus-within:ring-4 focus-within:ring-[#8f6d3d]/30 shadow-[0_0_15px_rgba(196,160,109,0.2)] transition-all">
-              <input
-                type="text"
+              <textarea
+                rows={1}
                 name="guest_chat_message"
                 id="guest-chat-message-input"
                 autoComplete="off"
                 autoCorrect="on"
                 autoCapitalize="sentences"
-                spellCheck="true"
+                spellCheck={true}
                 enterKeyHint="send"
                 data-form-type="other"
                 data-lpignore="true"
@@ -500,8 +500,14 @@ export default function HarnoorPage() {
                 aria-autocomplete="none"
                 value={landingInput}
                 onChange={(e) => setLandingInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    handleLandingSubmit(e);
+                  }
+                }}
                 placeholder="Type your message to Harnoor..."
-                className="flex-1 bg-transparent border-none outline-none text-xs sm:text-sm text-stone-800 dark:text-stone-100 focus:placeholder-transparent placeholder-stone-400 px-1"
+                className="flex-1 bg-transparent border-none outline-none text-xs sm:text-sm text-stone-800 dark:text-stone-100 focus:placeholder-transparent placeholder-stone-400 px-1 resize-none max-h-20 py-1 leading-normal"
               />
               <button
                 type="submit"
