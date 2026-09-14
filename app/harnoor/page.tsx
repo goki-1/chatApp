@@ -6,6 +6,8 @@ import { useAuth, useUser, useClerk } from "@clerk/nextjs";
 import { syncUser, getMessages, sendMessageAction, markMessageAsRead, createCheckoutSession, getLastBotActiveTime } from "@/lib/actions";
 import { CreditModal } from "@/components/CreditModal";
 import { supabase } from "@/lib/supabase";
+import { usePullToRefresh } from "@/hooks/usePullToRefresh";
+import { PullToRefreshIndicator } from "@/components/PullToRefreshIndicator";
 
 interface Message {
   id: string;
@@ -62,14 +64,7 @@ export default function HarnoorPage() {
   const [landingInput, setLandingInput] = useState("");
 
   // Authenticated chat state
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: "1",
-      sender: "Harnoor",
-      text: "Hello sir ji?",
-      timestamp: "",
-    },
-  ]);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
 
@@ -130,28 +125,59 @@ export default function HarnoorPage() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  // Mobile pull-to-refresh handler for chat screen
+  const handleRefreshChat = async () => {
+    if (!userDbId) return;
+
+    try {
+      const [messagesRes, userRes, botTimeRes] = await Promise.all([
+        getMessages(userDbId, 20),
+        syncUser(),
+        getLastBotActiveTime(),
+      ]);
+
+      if (messagesRes.success && messagesRes.messages) {
+        setHasMoreMessages(Boolean(messagesRes.hasMore));
+        const formatted: Message[] = messagesRes.messages.map((m: any) => ({
+          id: String(m.id),
+          sender: (m.sender_type === "user" ? "user" : "Harnoor") as "user" | "Harnoor",
+          text: m.message_text,
+          timestamp: new Date(m.created_at).toLocaleTimeString("en-US", { hour: '2-digit', minute: '2-digit' }),
+          createdAt: m.created_at,
+          status: m.is_read ? 'read' : 'delivered',
+        }));
+        setMessages(formatted);
+      }
+
+      if (userRes.success && userRes.user) {
+        setCredits(userRes.user.credits);
+        setCurrentConversationType(userRes.user.current_conversation_type);
+      }
+
+      if (botTimeRes.success && botTimeRes.createdAt) {
+        setLastBotCreatedAt(botTimeRes.createdAt);
+      }
+    } catch (err) {
+      console.error("Refresh failed:", err);
+    }
+  };
+
+  const { pullDistance, pullProgress, isRefreshing } = usePullToRefresh({
+    containerRef: scrollContainerRef,
+    onRefresh: handleRefreshChat,
+  });
+
   // Scroll to bottom on new messages
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isTyping]);
 
-  // Handle post-signup/signin pending message recovery
+  // Clean up any legacy pending guest message from localStorage
   useEffect(() => {
-    if (authLoaded && userId) {
-      const pendingMsg = localStorage.getItem("backstage_pending_msg");
-      if (pendingMsg) {
-        localStorage.removeItem("backstage_pending_msg");
-        const userMsgId = Date.now().toString();
-        const newMsg: Message = {
-          id: userMsgId,
-          sender: "user",
-          text: pendingMsg,
-          timestamp: new Date().toLocaleTimeString("en-US", { hour: '2-digit', minute: '2-digit' }),
-        };
-        setMessages(prev => [...prev, newMsg]);
-      }
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("backstage_pending_msg");
     }
-  }, [authLoaded, userId]);
+  }, []);
 
   // Sync authenticated Clerk user to Supabase
   useEffect(() => {
@@ -177,18 +203,20 @@ export default function HarnoorPage() {
     if (userDbId) {
       getMessages(userDbId, 20)
         .then((res) => {
-          if (res.success && res.messages) {
+          if (res.success) {
             setHasMoreMessages(Boolean(res.hasMore));
-            const formatted: Message[] = res.messages.map((m: any) => ({
-              id: String(m.id),
-              sender: (m.sender_type === "user" ? "user" : "Harnoor") as "user" | "Harnoor",
-              text: m.message_text,
-              timestamp: new Date(m.created_at).toLocaleTimeString("en-US", { hour: '2-digit', minute: '2-digit' }),
-              createdAt: m.created_at,
-              status: m.is_read ? 'read' : 'delivered',
-            }));
-            if (formatted.length > 0) {
+            if (res.messages) {
+              const formatted: Message[] = res.messages.map((m: any) => ({
+                id: String(m.id),
+                sender: (m.sender_type === "user" ? "user" : "Harnoor") as "user" | "Harnoor",
+                text: m.message_text,
+                timestamp: new Date(m.created_at).toLocaleTimeString("en-US", { hour: '2-digit', minute: '2-digit' }),
+                createdAt: m.created_at,
+                status: m.is_read ? 'read' : 'delivered',
+              }));
               setMessages(formatted);
+            } else {
+              setMessages([]);
             }
           } else {
             console.error("Failed to load messages:", res.error);
@@ -360,7 +388,6 @@ export default function HarnoorPage() {
     e.preventDefault();
     if (!landingInput.trim()) return;
 
-    localStorage.setItem("backstage_pending_msg", landingInput);
     clerk.openSignIn();
   };
 
@@ -580,77 +607,84 @@ export default function HarnoorPage() {
         </div>
 
         {/* Message List - Dynamic Scrollable */}
-        <div ref={scrollContainerRef} className="flex-1 min-h-0 overflow-y-auto overscroll-contain py-3 px-2.5 sm:px-5 space-y-2.5">
-          {hasMoreMessages && (
-            <div className="flex justify-center pb-2">
-              <button
-                type="button"
-                onClick={handleLoadEarlier}
-                disabled={isLoadingEarlier}
-                className="text-xs text-[#8f6d3d] hover:text-[#7a5c32] dark:text-[#c4a06d] bg-stone-100/90 dark:bg-stone-900/80 border border-stone-200/80 dark:border-stone-800/80 px-4 py-1.5 rounded-full shadow-xs disabled:opacity-50 font-medium transition-all cursor-pointer"
-              >
-                {isLoadingEarlier ? "Loading earlier messages..." : "Load earlier messages"}
-              </button>
-            </div>
-          )}
-          {messages.map((msg) => (
-            <div
-              key={msg.id}
-              className={`flex ${
-                msg.sender === "user" ? "justify-end" : "justify-start"
-              }`}
-            >
+        <div className="relative flex-1 min-h-0 flex flex-col overflow-hidden">
+          <PullToRefreshIndicator
+            pullDistance={pullDistance}
+            pullProgress={pullProgress}
+            isRefreshing={isRefreshing}
+          />
+          <div ref={scrollContainerRef} className="flex-1 min-h-0 overflow-y-auto overscroll-contain py-3 px-2.5 sm:px-5 space-y-2.5">
+            {hasMoreMessages && (
+              <div className="flex justify-center pb-2">
+                <button
+                  type="button"
+                  onClick={handleLoadEarlier}
+                  disabled={isLoadingEarlier}
+                  className="text-xs text-[#8f6d3d] hover:text-[#7a5c32] dark:text-[#c4a06d] bg-stone-100/90 dark:bg-stone-900/80 border border-stone-200/80 dark:border-stone-800/80 px-4 py-1.5 rounded-full shadow-xs disabled:opacity-50 font-medium transition-all cursor-pointer"
+                >
+                  {isLoadingEarlier ? "Loading earlier messages..." : "Load earlier messages"}
+                </button>
+              </div>
+            )}
+            {messages.map((msg) => (
               <div
-                className={`max-w-[82%] sm:max-w-[75%] px-3 pt-1.5 pb-1.5 rounded-2xl text-[14.5px] sm:text-[15px] leading-snug break-words ${
-                  msg.sender === "user"
-                    ? "bg-[#8f6d3d] text-white rounded-br-xs shadow-xs"
-                    : "bg-stone-200/90 text-stone-900 dark:bg-stone-800/95 dark:text-stone-50 rounded-bl-xs border border-stone-300/80 dark:border-stone-700/80 shadow-xs font-medium"
+                key={msg.id}
+                className={`flex ${
+                  msg.sender === "user" ? "justify-end" : "justify-start"
                 }`}
               >
-                <span>{msg.text}</span>
-                <span className="inline-flex items-center gap-0.5 float-right ml-2.5 mt-2.5 -mb-0.5 select-none shrink-0">
-                  {msg.timestamp && (
-                    <span
-                      className={`text-[8px] sm:text-[8.5px] tracking-tight leading-none ${
-                        msg.sender === "user"
-                          ? "text-amber-100/70"
-                          : "text-stone-500 dark:text-stone-400"
-                      }`}
-                    >
-                      {msg.timestamp.replace(/\s+/g, "\u2009")}
-                    </span>
-                  )}
-                  {/* Ticks for user messages */}
-                  {msg.sender === "user" && msg.status && (
-                    <span className="leading-none inline-flex items-center ml-0.5 text-[7.5px] sm:text-[8px]">
-                      {msg.status === "sent" && (
-                        <span className="text-amber-100/70" title="Sent">✓</span>
-                      )}
-                      {msg.status === "delivered" && (
-                        <span className="text-amber-100/90 font-bold" title="Delivered">✓✓</span>
-                      )}
-                      {msg.status === "read" && (
-                        <span className="text-sky-300 font-bold" title="Read">✓✓</span>
-                      )}
-                    </span>
-                  )}
-                </span>
+                <div
+                  className={`max-w-[82%] sm:max-w-[75%] px-3 pt-1.5 pb-1.5 rounded-2xl text-[14.5px] sm:text-[15px] leading-snug break-words ${
+                    msg.sender === "user"
+                      ? "bg-[#8f6d3d] text-white rounded-br-xs shadow-xs"
+                      : "bg-stone-200/90 text-stone-900 dark:bg-stone-800/95 dark:text-stone-50 rounded-bl-xs border border-stone-300/80 dark:border-stone-700/80 shadow-xs font-medium"
+                  }`}
+                >
+                  <span>{msg.text}</span>
+                  <span className="inline-flex items-center gap-0.5 float-right ml-2.5 mt-2.5 -mb-0.5 select-none shrink-0">
+                    {msg.timestamp && (
+                      <span
+                        className={`text-[8px] sm:text-[8.5px] tracking-tight leading-none ${
+                          msg.sender === "user"
+                            ? "text-amber-100/70"
+                            : "text-stone-500 dark:text-stone-400"
+                        }`}
+                      >
+                        {msg.timestamp.replace(/\s+/g, "\u2009")}
+                      </span>
+                    )}
+                    {/* Ticks for user messages */}
+                    {msg.sender === "user" && msg.status && (
+                      <span className="leading-none inline-flex items-center ml-0.5 text-[7.5px] sm:text-[8px]">
+                        {msg.status === "sent" && (
+                          <span className="text-amber-100/70" title="Sent">✓</span>
+                        )}
+                        {msg.status === "delivered" && (
+                          <span className="text-amber-100/90 font-bold" title="Delivered">✓✓</span>
+                        )}
+                        {msg.status === "read" && (
+                          <span className="text-sky-300 font-bold" title="Read">✓✓</span>
+                        )}
+                      </span>
+                    )}
+                  </span>
+                </div>
               </div>
-            </div>
-          ))}
+            ))}
 
-          {/* Typing Indicator */}
-          {isTyping && (
-            <div className="flex flex-col items-start space-y-1">
-              <div className="bg-stone-100/90 dark:bg-stone-900/80 border border-stone-200/60 dark:border-stone-800/60 px-4 py-3 rounded-2xl rounded-bl-none flex items-center space-x-1.5 shadow-xs">
-                <span className="w-1.5 h-1.5 bg-stone-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                <span className="w-1.5 h-1.5 bg-stone-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                <span className="w-1.5 h-1.5 bg-stone-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+            {/* Typing Indicator */}
+            {isTyping && (
+              <div className="flex flex-col items-start space-y-1">
+                <div className="bg-stone-100/90 dark:bg-stone-900/80 border border-stone-200/60 dark:border-stone-800/60 px-4 py-3 rounded-2xl rounded-bl-none flex items-center space-x-1.5 shadow-xs">
+                  <span className="w-1.5 h-1.5 bg-stone-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                  <span className="w-1.5 h-1.5 bg-stone-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                  <span className="w-1.5 h-1.5 bg-stone-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                </div>
               </div>
-            </div>
-          )}
+            )}
 
-          <div ref={messagesEndRef} />
+            <div ref={messagesEndRef} />
+          </div>
         </div>
 
         {/* Active Message Input Form */}

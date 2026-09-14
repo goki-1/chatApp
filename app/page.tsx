@@ -1,10 +1,12 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { useAuth, useUser, useClerk } from "@clerk/nextjs";
 import { syncUser, createCheckoutSession } from "@/lib/actions";
 import { CreditModal } from "@/components/CreditModal";
+import { usePullToRefresh } from "@/hooks/usePullToRefresh";
+import { PullToRefreshIndicator } from "@/components/PullToRefreshIndicator";
 
 export default function Home() {
   const { isLoaded: authLoaded, userId } = useAuth();
@@ -82,8 +84,40 @@ export default function Home() {
     }
   };
 
+  const containerRef = useRef<HTMLElement>(null);
+
+  const handleRefreshHome = async () => {
+    if (authLoaded && userId && userLoaded && user) {
+      try {
+        const res = await syncUser();
+        if (res.success && res.user) {
+          setUserDbId(res.user.id);
+          setCredits(res.user.credits);
+        }
+      } catch (err) {
+        console.error("Home refresh failed:", err);
+      }
+    } else {
+      await new Promise((r) => setTimeout(r, 400));
+    }
+  };
+
+  const { pullDistance, pullProgress, isRefreshing } = usePullToRefresh({
+    containerRef,
+    onRefresh: handleRefreshHome,
+  });
+
   return (
-    <main className="w-full flex-1 min-h-0 overflow-y-auto bg-[#FAF8F5] text-stone-900 dark:bg-[#070707] dark:text-stone-100 px-4 py-8 sm:px-8 sm:py-12 flex flex-col items-center">
+    <div className="relative w-full flex-1 min-h-0 flex flex-col overflow-hidden">
+      <PullToRefreshIndicator
+        pullDistance={pullDistance}
+        pullProgress={pullProgress}
+        isRefreshing={isRefreshing}
+      />
+      <main
+        ref={containerRef}
+        className="w-full flex-1 min-h-0 overflow-y-auto bg-[#FAF8F5] text-stone-900 dark:bg-[#070707] dark:text-stone-100 px-4 py-8 sm:px-8 sm:py-12 flex flex-col items-center"
+      >
       <div className="max-w-5xl w-full space-y-12">
         {/* Payment Notice Banner */}
         {paymentNotice && (
@@ -256,5 +290,6 @@ export default function Home() {
         errorText={creditsError}
       />
     </main>
+  </div>
   );
 }
