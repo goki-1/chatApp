@@ -47,7 +47,7 @@ export function InAppBrowserNotice() {
         <span className="text-base shrink-0">💡</span>
         {deviceType === "ios" ? (
           <p className="leading-tight text-[11.5px] sm:text-xs">
-            Viewing inside Instagram? Tap <strong className="font-bold underline decoration-white/60 underline-offset-2">⋯</strong> (top right) and select <strong className="font-semibold">&quot;Open in Safari&quot;</strong> for full chat &amp; sign-in features.
+            Viewing inside Instagram? Tap <strong className="font-bold underline decoration-white/60 underline-offset-2">⋯</strong> (top right) and select <strong className="font-semibold">&quot;Open in Safari&quot;</strong> for full chat.
           </p>
         ) : (
           <p className="leading-tight text-[11.5px] sm:text-xs">
