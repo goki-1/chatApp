@@ -5,11 +5,72 @@ import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import Stripe from "stripe";
 
 /**
- * Syncs the currently authenticated Clerk user to the 'users' table in Supabase.
- * Maps Clerk fields to your database schema (clerk_id, email, full_name, etc.).
- * Returns the matched database row containing the database auto-incremented 'id' and 'credits'.
+ * Creates a new guest user in Supabase with 50 free credits.
  */
-export async function syncUser() {
+export async function createGuestUser() {
+  try {
+    const guestClerkId = `guest_${crypto.randomUUID()}`;
+
+    const { data: dbUser, error } = await (supabaseAdmin as any)
+      .from("users")
+      .insert({
+        clerk_id: guestClerkId,
+        email: "",
+        full_name: "Guest User",
+        credits: 50,
+        updated_at: new Date().toISOString(),
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error("Error creating guest user in Supabase:", error);
+      return { success: false, error: error.message };
+    }
+
+    return { success: true, user: dbUser };
+  } catch (error: any) {
+    console.error("Unhandled error creating guest user:", error);
+    return { success: false, error: error.message || String(error) };
+  }
+}
+
+/**
+ * Retrieves an existing guest user by their stored guest clerk_id.
+ */
+export async function getGuestUser(guestClerkId: string) {
+  try {
+    if (!guestClerkId || !guestClerkId.startsWith("guest_")) {
+      return { success: false, error: "Invalid guest ID" };
+    }
+
+    const { data: dbUser, error } = await (supabaseAdmin as any)
+      .from("users")
+      .select("*")
+      .eq("clerk_id", guestClerkId)
+      .maybeSingle();
+
+    if (error) {
+      console.error("Error fetching guest user from Supabase:", error);
+      return { success: false, error: error.message };
+    }
+
+    if (!dbUser) {
+      return { success: false, error: "Guest user not found" };
+    }
+
+    return { success: true, user: dbUser };
+  } catch (error: any) {
+    console.error("Unhandled error fetching guest user:", error);
+    return { success: false, error: error.message || String(error) };
+  }
+}
+
+/**
+ * Syncs the currently authenticated Clerk user to the 'users' table in Supabase.
+ * If a guestClerkId is provided, merges guest chat messages and remaining credits into the permanent account.
+ */
+export async function syncUser(guestClerkId?: string) {
   try {
     const user = await currentUser();
     if (!user) {
@@ -24,8 +85,19 @@ export async function syncUser() {
     // Construct full name
     const fullName = [user.firstName, user.lastName].filter(Boolean).join(" ");
 
+    // Look up guest user if guestClerkId was provided
+    let guestUser: any = null;
+    if (guestClerkId && guestClerkId.startsWith("guest_")) {
+      const { data: gUser } = await (supabaseAdmin as any)
+        .from("users")
+        .select("*")
+        .eq("clerk_id", guestClerkId)
+        .maybeSingle();
+      guestUser = gUser;
+    }
+
     // Check if the user already exists in the 'users' table using clerk_id
-    const { data: existingUser, error: fetchError } = await supabaseAdmin
+    const { data: existingUser, error: fetchError } = await (supabaseAdmin as any)
       .from("users")
       .select("*")
       .eq("clerk_id", user.id)
@@ -39,12 +111,32 @@ export async function syncUser() {
     let dbUser;
 
     if (existingUser) {
-      // User exists: Update details
-      const { data, error: updateError } = await supabaseAdmin
+      // User exists: Update details and merge guest data if present
+      let finalCredits = existingUser.credits;
+
+      if (guestUser && guestUser.id !== existingUser.id) {
+        // Transfer messages from guest to existing permanent user
+        await (supabaseAdmin as any)
+          .from("messages")
+          .update({ user_id: existingUser.id })
+          .eq("user_id", guestUser.id);
+
+        // Add guest credits
+        finalCredits = (existingUser.credits ?? 0) + (guestUser.credits ?? 0);
+
+        // Delete guest row
+        await (supabaseAdmin as any)
+          .from("users")
+          .delete()
+          .eq("id", guestUser.id);
+      }
+
+      const { data, error: updateError } = await (supabaseAdmin as any)
         .from("users")
         .update({
           email: email,
           full_name: fullName,
+          credits: finalCredits,
           updated_at: new Date().toISOString(),
         })
         .eq("clerk_id", user.id)
@@ -56,9 +148,28 @@ export async function syncUser() {
         return { success: false, error: updateError.message };
       }
       dbUser = data;
+    } else if (guestUser) {
+      // User does not exist, but guest exists: Convert guest directly to Clerk user!
+      const { data, error: upgradeError } = await (supabaseAdmin as any)
+        .from("users")
+        .update({
+          clerk_id: user.id,
+          email: email,
+          full_name: fullName,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", guestUser.id)
+        .select()
+        .single();
+
+      if (upgradeError) {
+        console.error("Error upgrading guest user to Clerk user:", upgradeError);
+        return { success: false, error: upgradeError.message };
+      }
+      dbUser = data;
     } else {
-      // User does not exist: Create new record (database defaults credits to 10)
-      const { data, error: insertError } = await supabaseAdmin
+      // New user without guest account (database defaults credits to 10)
+      const { data, error: insertError } = await (supabaseAdmin as any)
         .from("users")
         .insert({
           clerk_id: user.id,

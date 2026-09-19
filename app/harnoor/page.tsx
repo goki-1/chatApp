@@ -3,8 +3,9 @@
 import React, { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { useAuth, useUser, useClerk } from "@clerk/nextjs";
-import { syncUser, getMessages, sendMessageAction, markMessageAsRead, createCheckoutSession, getLastBotActiveTime } from "@/lib/actions";
+import { syncUser, getMessages, sendMessageAction, markMessageAsRead, createCheckoutSession, getLastBotActiveTime, createGuestUser, getGuestUser } from "@/lib/actions";
 import { CreditModal } from "@/components/CreditModal";
+import { GuestEntryModal } from "@/components/GuestEntryModal";
 import { supabase } from "@/lib/supabase";
 import { usePullToRefresh } from "@/hooks/usePullToRefresh";
 import { PullToRefreshIndicator } from "@/components/PullToRefreshIndicator";
@@ -74,6 +75,12 @@ export default function HarnoorPage() {
   const [currentConversationType, setCurrentConversationType] = useState<string | null>(null);
   const [creditsError, setCreditsError] = useState<string | null>(null);
 
+  // Guest session states
+  const [isGuest, setIsGuest] = useState(false);
+  const [guestClerkId, setGuestClerkId] = useState<string | null>(null);
+  const [isGuestModalOpen, setIsGuestModalOpen] = useState(false);
+  const [isGuestCreating, setIsGuestCreating] = useState(false);
+
   // Pagination states
   const [hasMoreMessages, setHasMoreMessages] = useState(false);
   const [isLoadingEarlier, setIsLoadingEarlier] = useState(false);
@@ -130,9 +137,10 @@ export default function HarnoorPage() {
     if (!userDbId) return;
 
     try {
+      const userPromise = isGuest && guestClerkId ? getGuestUser(guestClerkId) : syncUser();
       const [messagesRes, userRes, botTimeRes] = await Promise.all([
         getMessages(userDbId, 20),
-        syncUser(),
+        userPromise,
         getLastBotActiveTime(),
       ]);
 
@@ -179,15 +187,26 @@ export default function HarnoorPage() {
     }
   }, []);
 
-  // Sync authenticated Clerk user to Supabase
+  // Handle Authentication and Guest Session loading
   useEffect(() => {
-    if (authLoaded && userId && userLoaded && user) {
-      syncUser()
+    if (!authLoaded) return;
+
+    if (userId) {
+      // User is authenticated with Clerk
+      setIsGuest(false);
+      setIsGuestModalOpen(false);
+
+      const storedGuestId = typeof window !== "undefined" ? localStorage.getItem("backstage_guest_id") : null;
+      syncUser(storedGuestId || undefined)
         .then((res) => {
           if (res.success && res.user) {
             setUserDbId(res.user.id);
             setCredits(res.user.credits);
             setCurrentConversationType(res.user.current_conversation_type);
+            // Clean up guest ID after merging
+            if (storedGuestId) {
+              localStorage.removeItem("backstage_guest_id");
+            }
           } else {
             console.error("Failed to sync user to Supabase:", res.error);
           }
@@ -195,6 +214,29 @@ export default function HarnoorPage() {
         .catch((err) => {
           console.error("Error invoking syncUser server action:", err);
         });
+    } else {
+      // User is not signed in with Clerk: Check for existing guest session
+      const storedGuestId = typeof window !== "undefined" ? localStorage.getItem("backstage_guest_id") : null;
+      if (storedGuestId) {
+        getGuestUser(storedGuestId).then((res) => {
+          if (res.success && res.user) {
+            setUserDbId(res.user.id);
+            setCredits(res.user.credits);
+            setIsGuest(true);
+            setGuestClerkId(storedGuestId);
+            setIsGuestModalOpen(false);
+          } else {
+            // Invalid or removed guest in database
+            if (typeof window !== "undefined") {
+              localStorage.removeItem("backstage_guest_id");
+            }
+            setIsGuestModalOpen(true);
+          }
+        });
+      } else {
+        // No user and no guest session: Open entry modal
+        setIsGuestModalOpen(true);
+      }
     }
   }, [authLoaded, userId, userLoaded, user]);
 
@@ -350,7 +392,13 @@ export default function HarnoorPage() {
         setPaymentNotice("Payment successful! Your credits have been updated.");
         const newUrl = window.location.pathname;
         window.history.replaceState({}, "", newUrl);
-        if (authLoaded && userId && userLoaded && user) {
+        if (isGuest && guestClerkId) {
+          getGuestUser(guestClerkId).then((res) => {
+            if (res.success && res.user) {
+              setCredits(res.user.credits);
+            }
+          });
+        } else if (authLoaded && userId && userLoaded && user) {
           syncUser().then((res) => {
             if (res.success && res.user) {
               setCredits(res.user.credits);
@@ -363,7 +411,7 @@ export default function HarnoorPage() {
         window.history.replaceState({}, "", newUrl);
       }
     }
-  }, [authLoaded, userId, userLoaded, user]);
+  }, [authLoaded, userId, userLoaded, user, isGuest, guestClerkId]);
 
   const handleCheckout = async (creditsTier: 50 | 100 | 200, currencyCode: string = "usd") => {
     if (!userDbId) return;
@@ -383,15 +431,94 @@ export default function HarnoorPage() {
     }
   };
 
-  // Handle landing page guest submit (signed out)
-  const handleLandingSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!landingInput.trim()) return;
+  const handleTalkAsGuest = async () => {
+    setIsGuestCreating(true);
+    try {
+      const res = await createGuestUser();
+      if (res.success && res.user) {
+        if (typeof window !== "undefined") {
+          localStorage.setItem("backstage_guest_id", res.user.clerk_id);
+        }
+        setUserDbId(res.user.id);
+        setCredits(res.user.credits);
+        setIsGuest(true);
+        setGuestClerkId(res.user.clerk_id);
+        setIsGuestModalOpen(false);
+      } else {
+        setCreditsError(res.error || "Failed to create guest account");
+      }
+    } catch (err: any) {
+      setCreditsError(err.message || "Failed to create guest account");
+    } finally {
+      setIsGuestCreating(false);
+    }
+  };
 
+  const handleModalSignIn = () => {
+    setIsGuestModalOpen(false);
     clerk.openSignIn();
   };
 
-  // Handle message window form submit (signed in)
+  // Handle landing page guest submit (signed out)
+  const handleLandingSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!landingInput.trim()) return;
+
+    const initialText = landingInput;
+    setLandingInput("");
+    setIsGuestCreating(true);
+
+    try {
+      const res = await createGuestUser();
+      if (res.success && res.user) {
+        if (typeof window !== "undefined") {
+          localStorage.setItem("backstage_guest_id", res.user.clerk_id);
+        }
+        setUserDbId(res.user.id);
+        setCredits(res.user.credits);
+        setIsGuest(true);
+        setGuestClerkId(res.user.clerk_id);
+        setIsGuestModalOpen(false);
+
+        // Optimistically add and send user's first message
+        const tempUserMsgId = "temp-" + Date.now();
+        const userMsg: Message = {
+          id: tempUserMsgId,
+          sender: "user",
+          text: initialText,
+          timestamp: new Date().toLocaleTimeString("en-US", { hour: '2-digit', minute: '2-digit' }),
+          createdAt: new Date().toISOString(),
+          status: 'sent',
+        };
+        setMessages([userMsg]);
+
+        const sendRes = await sendMessageAction(res.user.id, initialText);
+        if (sendRes.success) {
+          if (sendRes.updatedCredits !== undefined) {
+            setCredits(sendRes.updatedCredits);
+          }
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.id === tempUserMsgId
+                ? {
+                    ...msg,
+                    id: String(sendRes.userMsgId),
+                    createdAt: sendRes.userMsgCreatedAt,
+                    status: 'delivered',
+                  }
+                : msg
+            )
+          );
+        }
+      }
+    } catch (err: any) {
+      console.error("Error creating guest and sending:", err);
+    } finally {
+      setIsGuestCreating(false);
+    }
+  };
+
+  // Handle message window form submit (signed in or guest)
   const handleSend = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!input.trim() || !userDbId) return;
@@ -457,8 +584,8 @@ export default function HarnoorPage() {
     }
   };
 
-  // Signed Out View for Harnoor's promo link
-  if (authLoaded && !userId) {
+  // Signed Out View for Harnoor's promo link (only if no user and no guest active)
+  if (authLoaded && !userId && !userDbId) {
     const status = getBotStatus(messages, lastBotCreatedAt);
     return (
       <main className="relative w-full min-h-[calc(100vh-4rem)] bg-[#F5F2EB] dark:bg-[#050505] text-stone-900 dark:text-stone-100 flex items-start justify-center p-4 sm:p-6 pt-4 sm:pt-8 overflow-hidden">
@@ -492,7 +619,7 @@ export default function HarnoorPage() {
                 </div>
               </div>
               <p className="text-sm sm:text-base text-[#8f6d3d] dark:text-[#c4a06d] font-medium italic pt-1">
-                Chat for FREE
+                Chat for FREE (50 Credits)
               </p>
               <p className="text-sm sm:text-base text-[#8f6d3d] dark:text-[#c4a06d] font-medium italic pt-1">
                 ✨ I will reply in 1 minute ...
@@ -538,7 +665,7 @@ export default function HarnoorPage() {
               />
               <button
                 type="submit"
-                disabled={!landingInput.trim()}
+                disabled={!landingInput.trim() || isGuestCreating}
                 className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-gradient-to-tr from-[#9e7a44] via-[#b59052] to-[#d4af37] text-white flex items-center justify-center disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-200 hover:scale-105 active:scale-95 shadow-md shadow-[#9e7a44]/40 hover:shadow-lg cursor-pointer ml-1.5 shrink-0"
               >
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4 sm:w-4.5 sm:h-4.5 -rotate-45 translate-x-[1px] -translate-y-[1px] text-white filter drop-shadow-md">
@@ -547,20 +674,36 @@ export default function HarnoorPage() {
               </button>
             </div>
             <p className="text-[10px] text-center text-stone-400 dark:text-stone-600 mt-2">
-              Send your message to sign up.
+              Send your message to start chatting with 50 free credits!
             </p>
           </form>
         </div>
+
+        {/* Guest Entry Modal */}
+        <GuestEntryModal
+          isOpen={isGuestModalOpen}
+          onTalkAsGuest={handleTalkAsGuest}
+          onSignIn={handleModalSignIn}
+          isLoading={isGuestCreating}
+        />
       </main>
     );
   }
 
-  // Signed In Active Chat View
+  // Active Chat View (Logged in or Guest)
   return (
     <main
       className="relative w-full flex-1 min-h-0 bg-[#F5F2EB] dark:bg-[#050505] text-stone-900 dark:text-stone-100 flex flex-col overflow-hidden overscroll-none"
       data-conversation-type={currentConversationType ?? undefined}
     >
+      {/* Guest Entry Modal for active view if needed */}
+      <GuestEntryModal
+        isOpen={isGuestModalOpen}
+        onTalkAsGuest={handleTalkAsGuest}
+        onSignIn={handleModalSignIn}
+        isLoading={isGuestCreating}
+      />
+
       {/* Apple-Style Glassmorphic Studio Mesh Backdrop */}
       <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none">
         <div className="absolute -top-40 -left-40 w-[650px] h-[650px] rounded-full bg-gradient-to-tr from-[#8f6d3d]/45 via-[#c4a06d]/30 to-amber-500/20 dark:from-[#8f6d3d]/35 dark:via-[#c4a06d]/20 dark:to-[#3a2712]/50 blur-[100px] animate-pulse" />
@@ -592,7 +735,12 @@ export default function HarnoorPage() {
           </div>
           <div className="flex flex-col items-end">
             <span className="text-[10px] text-stone-400 dark:text-stone-500 uppercase tracking-widest font-semibold">Credits</span>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 sm:gap-2">
+              {isGuest && (
+                <span className="px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider rounded-full bg-amber-100/90 text-[#8f6d3d] dark:bg-[#8f6d3d]/25 dark:text-[#c4a06d] border border-[#8f6d3d]/30">
+                  Guest
+                </span>
+              )}
               <span className={`text-sm font-semibold tracking-wide ${credits !== null && credits > 0 ? "text-[#8f6d3d]" : "text-red-500 animate-pulse"}`}>
                 {credits !== null ? credits : "..."}
               </span>
@@ -602,6 +750,15 @@ export default function HarnoorPage() {
               >
                 + Refill
               </button>
+              {isGuest && (
+                <button
+                  onClick={() => clerk.openSignUp()}
+                  className="text-[10px] text-[#8f6d3d] dark:text-[#c4a06d] underline font-semibold cursor-pointer hover:opacity-80 ml-0.5"
+                  title="Sign up to save this chat history permanently"
+                >
+                  Save Chat
+                </button>
+              )}
             </div>
           </div>
         </div>

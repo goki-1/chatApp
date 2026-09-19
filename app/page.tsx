@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { useAuth, useUser, useClerk } from "@clerk/nextjs";
-import { syncUser, createCheckoutSession } from "@/lib/actions";
+import { syncUser, createCheckoutSession, getGuestUser } from "@/lib/actions";
 import { CreditModal } from "@/components/CreditModal";
 import { usePullToRefresh } from "@/hooks/usePullToRefresh";
 import { PullToRefreshIndicator } from "@/components/PullToRefreshIndicator";
@@ -17,20 +17,31 @@ export default function Home() {
   const [userDbId, setUserDbId] = useState<number | null>(null);
   const [credits, setCredits] = useState<number | null>(null);
 
+  // Guest states
+  const [isGuest, setIsGuest] = useState(false);
+  const [guestClerkId, setGuestClerkId] = useState<string | null>(null);
+
   // Stripe Payment & Refill Modal states
   const [isCreditModalOpen, setIsCreditModalOpen] = useState(false);
   const [isCheckoutLoading, setIsCheckoutLoading] = useState(false);
   const [paymentNotice, setPaymentNotice] = useState<string | null>(null);
   const [creditsError, setCreditsError] = useState<string | null>(null);
 
-  // Sync authenticated Clerk user to Supabase
+  // Sync authenticated Clerk user or load guest session
   useEffect(() => {
-    if (authLoaded && userId && userLoaded && user) {
-      syncUser()
+    if (!authLoaded) return;
+
+    if (userId && userLoaded && user) {
+      setIsGuest(false);
+      const storedGuestId = typeof window !== "undefined" ? localStorage.getItem("backstage_guest_id") : null;
+      syncUser(storedGuestId || undefined)
         .then((res) => {
           if (res.success && res.user) {
             setUserDbId(res.user.id);
             setCredits(res.user.credits);
+            if (storedGuestId) {
+              localStorage.removeItem("backstage_guest_id");
+            }
           } else {
             console.error("Failed to sync user to Supabase:", res.error);
           }
@@ -38,6 +49,19 @@ export default function Home() {
         .catch((err) => {
           console.error("Error invoking syncUser server action:", err);
         });
+    } else {
+      // Check for guest session
+      const storedGuestId = typeof window !== "undefined" ? localStorage.getItem("backstage_guest_id") : null;
+      if (storedGuestId) {
+        getGuestUser(storedGuestId).then((res) => {
+          if (res.success && res.user) {
+            setUserDbId(res.user.id);
+            setCredits(res.user.credits);
+            setIsGuest(true);
+            setGuestClerkId(storedGuestId);
+          }
+        });
+      }
     }
   }, [authLoaded, userId, userLoaded, user]);
 
@@ -51,7 +75,13 @@ export default function Home() {
         setPaymentNotice("Payment successful! Your credits have been updated.");
         const newUrl = window.location.pathname;
         window.history.replaceState({}, "", newUrl);
-        if (authLoaded && userId && userLoaded && user) {
+        if (isGuest && guestClerkId) {
+          getGuestUser(guestClerkId).then((res) => {
+            if (res.success && res.user) {
+              setCredits(res.user.credits);
+            }
+          });
+        } else if (authLoaded && userId && userLoaded && user) {
           syncUser().then((res) => {
             if (res.success && res.user) {
               setCredits(res.user.credits);
@@ -64,7 +94,7 @@ export default function Home() {
         window.history.replaceState({}, "", newUrl);
       }
     }
-  }, [authLoaded, userId, userLoaded, user]);
+  }, [authLoaded, userId, userLoaded, user, isGuest, guestClerkId]);
 
   const handleCheckout = async (creditsTier: 50 | 100 | 200, currencyCode: string = "usd") => {
     if (!userDbId) return;
@@ -96,6 +126,15 @@ export default function Home() {
         }
       } catch (err) {
         console.error("Home refresh failed:", err);
+      }
+    } else if (isGuest && guestClerkId) {
+      try {
+        const res = await getGuestUser(guestClerkId);
+        if (res.success && res.user) {
+          setCredits(res.user.credits);
+        }
+      } catch (err) {
+        console.error("Guest refresh failed:", err);
       }
     } else {
       await new Promise((r) => setTimeout(r, 400));
@@ -139,14 +178,21 @@ export default function Home() {
             Experience 1-on-1 private backstage chat sessions. Select a creator below to start an exclusive conversation.
           </p>
 
-          {/* User Credits Status Card */}
-          {authLoaded && userId && (
-            <div className="inline-flex items-center gap-4 bg-white dark:bg-[#121212] border border-stone-200 dark:border-stone-850 px-5 py-2.5 rounded-full shadow-sm mt-4">
+          {/* User Credits Status Card (Logged in or Guest) */}
+          {(userId || isGuest) && (
+            <div className="inline-flex items-center gap-3 sm:gap-4 bg-white dark:bg-[#121212] border border-stone-200 dark:border-stone-850 px-4 sm:px-5 py-2 sm:py-2.5 rounded-full shadow-sm mt-4">
               <div className="flex items-center gap-2">
-                <span className="text-xs text-stone-400 dark:text-stone-500 uppercase tracking-widest font-semibold">Your Balance:</span>
+                <span className="text-xs text-stone-400 dark:text-stone-500 uppercase tracking-widest font-semibold">
+                  {isGuest ? "Guest Balance:" : "Your Balance:"}
+                </span>
                 <span className="text-sm font-bold text-[#8f6d3d]">
                   {credits !== null ? `${credits} Credits` : "Loading..."}
                 </span>
+                {isGuest && (
+                  <span className="px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider rounded-full bg-amber-100/90 text-[#8f6d3d] dark:bg-[#8f6d3d]/25 dark:text-[#c4a06d] border border-[#8f6d3d]/30">
+                    Guest
+                  </span>
+                )}
               </div>
               <button
                 onClick={() => setIsCreditModalOpen(true)}
