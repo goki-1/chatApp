@@ -58,7 +58,7 @@ export function GuestEntryModal({
               <span>{isLoading ? "Setting up chat..." : "Talk as Guest"}</span>
             </div>
             <span className="bg-white/25 text-white text-[11px] font-bold px-2.5 py-0.5 rounded-full uppercase tracking-wider backdrop-blur-xs">
-              16 Free Credits
+              20 Free Credits
             </span>
           </button>
 

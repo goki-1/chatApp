@@ -5,7 +5,7 @@ import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import Stripe from "stripe";
 
 /**
- * Creates a new guest user in Supabase with 16 free credits.
+ * Creates a new guest user in Supabase with 20 free credits.
  */
 export async function createGuestUser() {
   try {
@@ -17,7 +17,7 @@ export async function createGuestUser() {
         clerk_id: guestClerkId,
         email: "",
         full_name: "Guest User",
-        credits: 16,
+        credits: 20,
         updated_at: new Date().toISOString(),
       })
       .select()

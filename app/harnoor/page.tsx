@@ -674,7 +674,7 @@ export default function HarnoorPage() {
               </button>
             </div>
             <p className="text-[10px] text-center text-stone-400 dark:text-stone-600 mt-2">
-              Send your message to start chatting with 16 free credits!
+              Send your message to start chatting with 20 free credits!
             </p>
           </form>
         </div>
