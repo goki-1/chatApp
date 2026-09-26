@@ -3,15 +3,17 @@
 import React, { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { useAuth, useUser, useClerk } from "@clerk/nextjs";
-import { syncUser, createCheckoutSession, getGuestUser } from "@/lib/actions";
+import { syncUser, createCheckoutSession, createDodoCheckoutSession, syncDodoPaymentOnRedirect, getGuestUser } from "@/lib/actions";
 import { CreditModal } from "@/components/CreditModal";
 import { usePullToRefresh } from "@/hooks/usePullToRefresh";
 import { PullToRefreshIndicator } from "@/components/PullToRefreshIndicator";
+import { useInAppBrowser } from "@/context/InAppBrowserContext";
 
 export default function Home() {
   const { isLoaded: authLoaded, userId } = useAuth();
   const { isLoaded: userLoaded, user } = useUser();
   const clerk = useClerk();
+  const { isInApp, openModal } = useInAppBrowser();
 
   // Database states
   const [userDbId, setUserDbId] = useState<number | null>(null);
@@ -65,7 +67,7 @@ export default function Home() {
     }
   }, [authLoaded, userId, userLoaded, user]);
 
-  // Handle Stripe Payment redirect status
+  // Handle Payment redirect status
   useEffect(() => {
     if (typeof window !== "undefined") {
       const urlParams = new URLSearchParams(window.location.search);
@@ -75,26 +77,45 @@ export default function Home() {
         setPaymentNotice("Payment successful! Your credits have been updated.");
         const newUrl = window.location.pathname;
         window.history.replaceState({}, "", newUrl);
-        if (isGuest && guestClerkId) {
-          getGuestUser(guestClerkId).then((res) => {
-            if (res.success && res.user) {
-              setCredits(res.user.credits);
+
+        const syncPayment = async () => {
+          let targetDbId = userDbId;
+          if (!targetDbId) {
+            const storedGuestId = localStorage.getItem("backstage_guest_id");
+            if (storedGuestId) {
+              const res = await getGuestUser(storedGuestId);
+              if (res.success && res.user) targetDbId = res.user.id;
+            } else if (authLoaded && userId) {
+              const res = await syncUser();
+              if (res.success && res.user) targetDbId = res.user.id;
             }
-          });
-        } else if (authLoaded && userId && userLoaded && user) {
-          syncUser().then((res) => {
-            if (res.success && res.user) {
-              setCredits(res.user.credits);
+          }
+
+          if (targetDbId) {
+            const syncRes = await syncDodoPaymentOnRedirect(targetDbId);
+            if (syncRes.success && typeof syncRes.credits === "number") {
+              setCredits(syncRes.credits);
             }
-          });
-        }
+          }
+
+          // Also re-verify user balance
+          if (isGuest && guestClerkId) {
+            const res = await getGuestUser(guestClerkId);
+            if (res.success && res.user) setCredits(res.user.credits);
+          } else if (authLoaded && userId && userLoaded && user) {
+            const res = await syncUser();
+            if (res.success && res.user) setCredits(res.user.credits);
+          }
+        };
+
+        syncPayment();
       } else if (paymentStatus === "cancelled") {
         setPaymentNotice("Payment was cancelled.");
         const newUrl = window.location.pathname;
         window.history.replaceState({}, "", newUrl);
       }
     }
-  }, [authLoaded, userId, userLoaded, user, isGuest, guestClerkId]);
+  }, [authLoaded, userId, userLoaded, user, isGuest, guestClerkId, userDbId]);
 
   const handleCheckout = async (creditsTier: 50 | 100 | 200, currencyCode: string = "usd") => {
     if (!userDbId) return;
@@ -106,6 +127,24 @@ export default function Home() {
         window.location.href = res.url;
       } else {
         setCreditsError(res.error || "Failed to initiate Stripe checkout");
+        setIsCheckoutLoading(false);
+      }
+    } catch (err: any) {
+      setCreditsError(err.message || "Checkout error occurred");
+      setIsCheckoutLoading(false);
+    }
+  };
+
+  const handleDodoCheckout = async (creditsTier: 50 | 100 | 200) => {
+    if (!userDbId) return;
+    setIsCheckoutLoading(true);
+    try {
+      const currentUrl = window.location.origin + window.location.pathname;
+      const res = await createDodoCheckoutSession(userDbId, creditsTier, currentUrl);
+      if (res.success && res.url) {
+        window.location.href = res.url;
+      } else {
+        setCreditsError(res.error || "Failed to initiate UPI checkout");
         setIsCheckoutLoading(false);
       }
     } catch (err: any) {
@@ -195,7 +234,13 @@ export default function Home() {
                 )}
               </div>
               <button
-                onClick={() => setIsCreditModalOpen(true)}
+                onClick={() => {
+                  if (isInApp) {
+                    openModal();
+                    return;
+                  }
+                  setIsCreditModalOpen(true);
+                }}
                 className="px-3 py-1 text-xs font-semibold tracking-wider uppercase rounded-full bg-[#8f6d3d] hover:bg-[#7a5c32] text-white transition-all duration-200 active:scale-95 cursor-pointer shadow-sm"
               >
                 + Refill
@@ -332,6 +377,7 @@ export default function Home() {
         onClose={() => setIsCreditModalOpen(false)}
         userDbId={userDbId}
         onCheckout={handleCheckout}
+        onDodoCheckout={handleDodoCheckout}
         isLoading={isCheckoutLoading}
         errorText={creditsError}
       />

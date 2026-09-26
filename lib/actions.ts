@@ -362,11 +362,11 @@ export async function createCheckoutSession(
 
     if (curr === "inr") {
       // 50 credits -> ₹199 INR (19900 paise)
-      // 100 credits -> ₹349 INR (34900 paise)
-      // 200 credits -> ₹549 INR (54900 paise)
+      // 100 credits -> ₹299 INR (29900 paise)
+      // 200 credits -> ₹499 INR (49900 paise)
       if (creditsTier === 50) unitAmount = 19900;
-      if (creditsTier === 100) unitAmount = 34900;
-      if (creditsTier === 200) unitAmount = 54900;
+      if (creditsTier === 100) unitAmount = 29900;
+      if (creditsTier === 200) unitAmount = 49900;
     } else {
       // USD default
       // 50 credits -> $2.99 USD (299 cents)
@@ -414,6 +414,101 @@ export async function createCheckoutSession(
 }
 
 /**
+ * Creates a Dodo Payments checkout session for UPI / Global payments.
+ */
+export async function createDodoCheckoutSession(
+  userDbId: number,
+  creditsTier: 50 | 100 | 200,
+  returnUrl: string
+) {
+  try {
+    const apiKey = process.env.DODO_PAYMENTS_API_KEY;
+    if (!apiKey) {
+      console.error("Missing DODO_PAYMENTS_API_KEY");
+      return { success: false, error: "Dodo Payments configuration missing" };
+    }
+
+    const endpoint = process.env.DODO_PAYMENTS_ENDPOINT || "https://test.dodopayments.com";
+
+    let productId = "";
+    if (creditsTier === 50) productId = process.env.DODO_PRODUCT_50 || "";
+    else if (creditsTier === 100) productId = process.env.DODO_PRODUCT_100 || "";
+    else if (creditsTier === 200) productId = process.env.DODO_PRODUCT_200 || "";
+
+    if (!productId) {
+      return { success: false, error: "Invalid credit tier or missing product ID" };
+    }
+
+    // Query user details from Supabase to prefill customer info so user is never asked for name/email/address
+    const { data: dbUser } = await (supabaseAdmin as any)
+      .from("users")
+      .select("email, full_name")
+      .eq("id", userDbId)
+      .single();
+
+    const customerName = dbUser?.full_name?.trim() || "Backstage Member";
+    const customerEmail =
+      dbUser?.email && dbUser.email.includes("@")
+        ? dbUser.email.trim()
+        : `member_${userDbId}@backstagechat.me`;
+
+    const connector = returnUrl.includes("?") ? "&" : "?";
+    const redirectUrl = `${returnUrl}${connector}payment=success`;
+
+    const res = await fetch(`${endpoint}/checkouts`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        product_cart: [{ product_id: productId, quantity: 1 }],
+        billing_currency: "INR",
+        billing_address: {
+          country: "IN",
+          city: "New Delhi",
+          street: "Connaught Place",
+          state: "Delhi",
+          zipcode: "110001",
+        },
+        confirm: true,
+        allowed_payment_method_types: ["upi_intent"],
+        customer: {
+          name: customerName,
+          email: customerEmail,
+          phone_number: "+919876543210",
+        },
+        return_url: redirectUrl,
+        metadata: {
+          userId: String(userDbId),
+          creditsToBuy: String(creditsTier),
+        },
+      }),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      console.error("Dodo checkout creation failed:", res.status, errText);
+      return { success: false, error: `Checkout creation failed: ${errText}` };
+    }
+
+    const data = (await res.json()) as { checkout_url?: string; session_id?: string };
+    if (!data.checkout_url) {
+      return { success: false, error: "No checkout URL returned by Dodo Payments" };
+    }
+
+    return {
+      success: true,
+      url: data.checkout_url,
+      sessionId: data.session_id,
+    };
+  } catch (error: any) {
+    console.error("Error creating Dodo checkout session:", error);
+    return { success: false, error: error.message || String(error) };
+  }
+}
+
+/**
  * Creates a Stripe PaymentIntent for embedded Express Checkout Elements (Apple Pay, Google Pay, Link).
  */
 export async function createPaymentIntentAction(
@@ -433,7 +528,7 @@ export async function createPaymentIntentAction(
     });
 
     const curr = currencyCode.toLowerCase() === "inr" ? "inr" : "usd";
-    let unitAmount = 499; // Default 100 credits = $4.99 USD (499 cents)
+    let unitAmount = 299;
 
     if (curr === "inr") {
       // 50 credits -> ₹199 (19900 paise)
@@ -473,5 +568,114 @@ export async function createPaymentIntentAction(
   } catch (error: any) {
     console.error("Error creating Stripe PaymentIntent:", error);
     return { success: false, error: error.message || String(error) };
+  }
+}
+
+/**
+ * Safely processes a successful payment and adds credits to the user in Supabase.
+ * Idempotent: checks token1 to avoid double crediting.
+ */
+export async function processPaymentSuccess(
+  userDbId: number,
+  creditsToBuy: number,
+  paymentId: string
+) {
+  try {
+    const { data: user, error: userError } = await (supabaseAdmin as any)
+      .from("users")
+      .select("credits, token1")
+      .eq("id", userDbId)
+      .single();
+
+    if (userError || !user) {
+      console.error(`Error fetching user ${userDbId}:`, userError);
+      return { success: false, error: userError?.message || "User not found" };
+    }
+
+    const processedPayments = (user.token1 || "").split(",");
+    if (processedPayments.includes(paymentId)) {
+      console.log(`Payment ${paymentId} already processed for user ${userDbId}`);
+      return { success: true, credits: user.credits, alreadyProcessed: true };
+    }
+
+    const currentCredits = user.credits ?? 0;
+    const newCredits = currentCredits + creditsToBuy;
+    const updatedToken1 = user.token1 ? `${user.token1},${paymentId}` : paymentId;
+
+    const { error: updateError } = await (supabaseAdmin as any)
+      .from("users")
+      .update({
+        credits: newCredits,
+        token1: updatedToken1,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", userDbId);
+
+    if (updateError) {
+      console.error(`Error updating credits for user ${userDbId}:`, updateError);
+      return { success: false, error: updateError.message };
+    }
+
+    console.log(`[Payment] Added ${creditsToBuy} credits to user ${userDbId}. New balance: ${newCredits}`);
+    return { success: true, credits: newCredits, alreadyProcessed: false };
+  } catch (err: any) {
+    console.error("Error in processPaymentSuccess:", err);
+    return { success: false, error: err.message || String(err) };
+  }
+}
+
+/**
+ * Verifies any recently succeeded Dodo payments for a user and credits them immediately.
+ * Called automatically when user redirects back with ?payment=success.
+ */
+export async function syncDodoPaymentOnRedirect(userDbId: number) {
+  try {
+    const apiKey = process.env.DODO_PAYMENTS_API_KEY;
+    if (!apiKey) {
+      return { success: false, error: "Missing Dodo API key" };
+    }
+
+    const endpoint = process.env.DODO_PAYMENTS_ENDPOINT || "https://test.dodopayments.com";
+    const res = await fetch(`${endpoint}/payments`, {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+      },
+      cache: "no-store",
+    });
+
+    if (!res.ok) {
+      return { success: false, error: "Failed to fetch payments from Dodo" };
+    }
+
+    const data = await res.json();
+    const payments = data.items || [];
+
+    // Find the most recent succeeded payment for this user
+    const userPayment = payments.find((p: any) => {
+      return (
+        p.status === "succeeded" &&
+        p.metadata?.userId === String(userDbId)
+      );
+    });
+
+    if (userPayment) {
+      const creditsToBuy = parseInt(userPayment.metadata?.creditsToBuy || "0", 10);
+      if (creditsToBuy > 0) {
+        const result = await processPaymentSuccess(userDbId, creditsToBuy, userPayment.payment_id);
+        return result;
+      }
+    }
+
+    // Fallback: fetch current credits
+    const { data: user } = await (supabaseAdmin as any)
+      .from("users")
+      .select("credits")
+      .eq("id", userDbId)
+      .single();
+
+    return { success: true, credits: user?.credits ?? 0 };
+  } catch (err: any) {
+    console.error("Error in syncDodoPaymentOnRedirect:", err);
+    return { success: false, error: err.message || String(err) };
   }
 }

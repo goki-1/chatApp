@@ -3,12 +3,13 @@
 import React, { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { useAuth, useUser, useClerk } from "@clerk/nextjs";
-import { syncUser, getMessages, sendMessageAction, markMessageAsRead, createCheckoutSession, getLastBotActiveTime, createGuestUser, getGuestUser } from "@/lib/actions";
+import { syncUser, getMessages, sendMessageAction, markMessageAsRead, createCheckoutSession, createDodoCheckoutSession, syncDodoPaymentOnRedirect, getLastBotActiveTime, createGuestUser, getGuestUser } from "@/lib/actions";
 import { CreditModal } from "@/components/CreditModal";
 import { GuestEntryModal } from "@/components/GuestEntryModal";
 import { supabase } from "@/lib/supabase";
 import { usePullToRefresh } from "@/hooks/usePullToRefresh";
 import { PullToRefreshIndicator } from "@/components/PullToRefreshIndicator";
+import { useInAppBrowser } from "@/context/InAppBrowserContext";
 
 interface Message {
   id: string;
@@ -60,6 +61,7 @@ export default function HarnoorPage() {
   const { isLoaded: authLoaded, userId } = useAuth();
   const { isLoaded: userLoaded, user } = useUser();
   const clerk = useClerk();
+  const { isInApp, openModal } = useInAppBrowser();
 
   // Guest landing input state (signed out)
   const [landingInput, setLandingInput] = useState("");
@@ -382,7 +384,7 @@ export default function HarnoorPage() {
     };
   }, [userDbId]);
 
-  // Handle Stripe Payment redirect status
+  // Handle Payment redirect status
   useEffect(() => {
     if (typeof window !== "undefined") {
       const urlParams = new URLSearchParams(window.location.search);
@@ -392,26 +394,45 @@ export default function HarnoorPage() {
         setPaymentNotice("Payment successful! Your credits have been updated.");
         const newUrl = window.location.pathname;
         window.history.replaceState({}, "", newUrl);
-        if (isGuest && guestClerkId) {
-          getGuestUser(guestClerkId).then((res) => {
-            if (res.success && res.user) {
-              setCredits(res.user.credits);
+
+        const syncPayment = async () => {
+          let targetDbId = userDbId;
+          if (!targetDbId) {
+            const storedGuestId = localStorage.getItem("backstage_guest_id");
+            if (storedGuestId) {
+              const res = await getGuestUser(storedGuestId);
+              if (res.success && res.user) targetDbId = res.user.id;
+            } else if (authLoaded && userId) {
+              const res = await syncUser();
+              if (res.success && res.user) targetDbId = res.user.id;
             }
-          });
-        } else if (authLoaded && userId && userLoaded && user) {
-          syncUser().then((res) => {
-            if (res.success && res.user) {
-              setCredits(res.user.credits);
+          }
+
+          if (targetDbId) {
+            const syncRes = await syncDodoPaymentOnRedirect(targetDbId);
+            if (syncRes.success && typeof syncRes.credits === "number") {
+              setCredits(syncRes.credits);
             }
-          });
-        }
+          }
+
+          // Also re-verify user balance
+          if (isGuest && guestClerkId) {
+            const res = await getGuestUser(guestClerkId);
+            if (res.success && res.user) setCredits(res.user.credits);
+          } else if (authLoaded && userId && userLoaded && user) {
+            const res = await syncUser();
+            if (res.success && res.user) setCredits(res.user.credits);
+          }
+        };
+
+        syncPayment();
       } else if (paymentStatus === "cancelled") {
         setPaymentNotice("Payment was cancelled.");
         const newUrl = window.location.pathname;
         window.history.replaceState({}, "", newUrl);
       }
     }
-  }, [authLoaded, userId, userLoaded, user, isGuest, guestClerkId]);
+  }, [authLoaded, userId, userLoaded, user, isGuest, guestClerkId, userDbId]);
 
   const handleCheckout = async (creditsTier: 50 | 100 | 200, currencyCode: string = "usd") => {
     if (!userDbId) return;
@@ -431,7 +452,29 @@ export default function HarnoorPage() {
     }
   };
 
+  const handleDodoCheckout = async (creditsTier: 50 | 100 | 200) => {
+    if (!userDbId) return;
+    setIsCheckoutLoading(true);
+    try {
+      const currentUrl = window.location.origin + window.location.pathname;
+      const res = await createDodoCheckoutSession(userDbId, creditsTier, currentUrl);
+      if (res.success && res.url) {
+        window.location.href = res.url;
+      } else {
+        setCreditsError(res.error || "Failed to initiate UPI checkout");
+        setIsCheckoutLoading(false);
+      }
+    } catch (err: any) {
+      setCreditsError(err.message || "Checkout error occurred");
+      setIsCheckoutLoading(false);
+    }
+  };
+
   const handleTalkAsGuest = async () => {
+    if (isInApp) {
+      openModal();
+      return;
+    }
     setIsGuestCreating(true);
     try {
       const res = await createGuestUser();
@@ -455,6 +498,10 @@ export default function HarnoorPage() {
   };
 
   const handleModalSignIn = () => {
+    if (isInApp) {
+      openModal();
+      return;
+    }
     setIsGuestModalOpen(false);
     clerk.openSignIn();
   };
@@ -462,6 +509,10 @@ export default function HarnoorPage() {
   // Handle landing page guest submit (signed out)
   const handleLandingSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isInApp) {
+      openModal();
+      return;
+    }
     if (!landingInput.trim()) return;
 
     const initialText = landingInput;
@@ -525,6 +576,10 @@ export default function HarnoorPage() {
 
     // Check credits before sending
     if (credits !== null && credits <= 0) {
+      if (isInApp) {
+        openModal();
+        return;
+      }
       setCreditsError("You have 0 credits. Please refill to continue messaging.");
       setIsCreditModalOpen(true);
       return;
@@ -745,14 +800,26 @@ export default function HarnoorPage() {
                 {credits !== null ? credits : "..."}
               </span>
               <button
-                onClick={() => setIsCreditModalOpen(true)}
+                onClick={() => {
+                  if (isInApp) {
+                    openModal();
+                    return;
+                  }
+                  setIsCreditModalOpen(true);
+                }}
                 className="px-2.5 py-0.5 text-[10px] font-semibold tracking-wider uppercase rounded-full bg-[#8f6d3d] hover:bg-[#7a5c32] text-white transition-all duration-200 active:scale-95 shadow-sm cursor-pointer"
               >
                 + Refill
               </button>
               {isGuest && (
                 <button
-                  onClick={() => clerk.openSignUp()}
+                  onClick={() => {
+                    if (isInApp) {
+                      openModal();
+                      return;
+                    }
+                    clerk.openSignUp();
+                  }}
                   className="text-[10px] text-[#8f6d3d] dark:text-[#c4a06d] underline font-semibold cursor-pointer hover:opacity-80 ml-0.5"
                   title="Sign up to save this chat history permanently"
                 >
@@ -860,7 +927,19 @@ export default function HarnoorPage() {
           {creditsError && (
             <div className="mb-2 text-xs text-red-600 dark:text-red-400 font-semibold px-3.5 py-1.5 bg-red-50 dark:bg-red-950/20 border border-red-200/50 dark:border-red-900/30 rounded-2xl text-center flex justify-between items-center">
               <span>{creditsError}</span>
-              <button type="button" onClick={() => setIsCreditModalOpen(true)} className="underline text-[#8f6d3d] font-bold ml-2">Refill Now</button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (isInApp) {
+                    openModal();
+                    return;
+                  }
+                  setIsCreditModalOpen(true);
+                }}
+                className="underline text-[#8f6d3d] font-bold ml-2"
+              >
+                Refill Now
+              </button>
             </div>
           )}
           <div className="flex items-center bg-stone-100/90 dark:bg-stone-900/90 rounded-full px-3.5 py-1.5 sm:px-4 sm:py-2 border-2 border-[#8f6d3d]/70 dark:border-[#c4a06d]/80 focus-within:border-[#8f6d3d] dark:focus-within:border-[#c4a06d] focus-within:ring-4 focus-within:ring-[#8f6d3d]/30 shadow-[0_0_15px_rgba(196,160,109,0.2)] transition-all">
@@ -925,6 +1004,7 @@ export default function HarnoorPage() {
         onClose={() => setIsCreditModalOpen(false)}
         userDbId={userDbId}
         onCheckout={handleCheckout}
+        onDodoCheckout={handleDodoCheckout}
         isLoading={isCheckoutLoading}
         errorText={creditsError}
       />
