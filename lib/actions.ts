@@ -168,13 +168,14 @@ export async function syncUser(guestClerkId?: string) {
       }
       dbUser = data;
     } else {
-      // New user without guest account (database defaults credits to 10)
+      // New user without guest account: Grant 20 free credits
       const { data, error: insertError } = await (supabaseAdmin as any)
         .from("users")
         .insert({
           clerk_id: user.id,
           email: email,
           full_name: fullName,
+          credits: 20,
           updated_at: new Date().toISOString(),
         })
         .select()
