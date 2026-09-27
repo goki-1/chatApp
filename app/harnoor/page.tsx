@@ -384,14 +384,63 @@ export default function HarnoorPage() {
     };
   }, [userDbId]);
 
-  // Handle Payment redirect status
+  // Handle Payment redirect status (Supports both Dodo Payments and Stripe)
   useEffect(() => {
     if (typeof window !== "undefined") {
       const urlParams = new URLSearchParams(window.location.search);
-      const paymentStatus = urlParams.get("payment");
+      const provider = urlParams.get("provider");
+      const dodoStatus = urlParams.get("status");
+      const dodoPaymentId = urlParams.get("payment_id");
+      const stripePayment = urlParams.get("payment");
 
-      if (paymentStatus === "success") {
+      // 1. DODO PAYMENTS REDIRECT
+      if (provider === "dodo" || dodoPaymentId || (dodoStatus && !stripePayment)) {
+        setIsCheckoutLoading(false);
+        setIsCreditModalOpen(false);
+
+        const newUrl = window.location.pathname;
+        window.history.replaceState({}, "", newUrl);
+
+        if (dodoStatus === "succeeded" && dodoPaymentId) {
+          const syncPayment = async () => {
+            let targetDbId = userDbId;
+            if (!targetDbId) {
+              const storedGuestId = localStorage.getItem("backstage_guest_id");
+              if (storedGuestId) {
+                const res = await getGuestUser(storedGuestId);
+                if (res.success && res.user) targetDbId = res.user.id;
+              } else if (authLoaded && userId) {
+                const res = await syncUser();
+                if (res.success && res.user) targetDbId = res.user.id;
+              }
+            }
+
+            if (targetDbId) {
+              const syncRes = await syncDodoPaymentOnRedirect(targetDbId, dodoPaymentId);
+              if (syncRes.success && typeof syncRes.credits === "number") {
+                setCredits(syncRes.credits);
+                setPaymentNotice("Payment successful! Your credits have been updated.");
+              } else {
+                setCreditsError(syncRes.error || "Payment verification failed.");
+              }
+            }
+          };
+          syncPayment();
+        } else if (dodoStatus === "failed") {
+          setPaymentNotice("Payment failed. Please try again.");
+        } else if (dodoStatus === "cancelled") {
+          setPaymentNotice("Payment was cancelled.");
+        } else if (dodoStatus === "pending") {
+          setPaymentNotice("Payment is pending confirmation. Your balance will update shortly.");
+        }
+        return;
+      }
+
+      // 2. STRIPE REDIRECT
+      if (stripePayment === "success") {
         setPaymentNotice("Payment successful! Your credits have been updated.");
+        setIsCheckoutLoading(false);
+        setIsCreditModalOpen(false);
         const newUrl = window.location.pathname;
         window.history.replaceState({}, "", newUrl);
 
@@ -408,14 +457,7 @@ export default function HarnoorPage() {
             }
           }
 
-          if (targetDbId) {
-            const syncRes = await syncDodoPaymentOnRedirect(targetDbId);
-            if (syncRes.success && typeof syncRes.credits === "number") {
-              setCredits(syncRes.credits);
-            }
-          }
-
-          // Also re-verify user balance
+          // Re-verify user balance
           if (isGuest && guestClerkId) {
             const res = await getGuestUser(guestClerkId);
             if (res.success && res.user) setCredits(res.user.credits);
@@ -426,7 +468,7 @@ export default function HarnoorPage() {
         };
 
         syncPayment();
-      } else if (paymentStatus === "cancelled") {
+      } else if (stripePayment === "cancelled") {
         setPaymentNotice("Payment was cancelled.");
         setIsCheckoutLoading(false);
         setIsCreditModalOpen(false);

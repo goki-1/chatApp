@@ -453,7 +453,7 @@ export async function createDodoCheckoutSession(
         : `member_${userDbId}@backstagechat.me`;
 
     const connector = returnUrl.includes("?") ? "&" : "?";
-    const redirectUrl = `${returnUrl}${connector}payment=success`;
+    const redirectUrl = `${returnUrl}${connector}provider=dodo`;
 
     const res = await fetch(`${endpoint}/checkouts`, {
       method: "POST",
@@ -628,45 +628,49 @@ export async function processPaymentSuccess(
  * Verifies any recently succeeded Dodo payments for a user and credits them immediately.
  * Called automatically when user redirects back with ?payment=success.
  */
-export async function syncDodoPaymentOnRedirect(userDbId: number) {
+export async function syncDodoPaymentOnRedirect(
+  userDbId: number,
+  paymentId?: string
+): Promise<{ success: boolean; credits?: number; error?: string; alreadyProcessed?: boolean }> {
   try {
     const apiKey = process.env.DODO_PAYMENTS_API_KEY;
     if (!apiKey) {
+      console.error("Missing DODO_PAYMENTS_API_KEY in environment variables");
       return { success: false, error: "Missing Dodo API key" };
     }
 
     const endpoint = process.env.DODO_PAYMENTS_ENDPOINT || "https://test.dodopayments.com";
-    const res = await fetch(`${endpoint}/payments`, {
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-      },
-      cache: "no-store",
-    });
 
-    if (!res.ok) {
-      return { success: false, error: "Failed to fetch payments from Dodo" };
-    }
+    // 1. If paymentId is available from redirect query params, retrieve the exact payment record
+    if (paymentId) {
+      console.log(`[Dodo Redirect Sync] Checking payment ${paymentId} for user ${userDbId}...`);
+      const res = await fetch(`${endpoint}/payments/${paymentId}`, {
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+        },
+        cache: "no-store",
+      });
 
-    const data = await res.json();
-    const payments = data.items || [];
+      if (res.ok) {
+        const payment = await res.json();
+        console.log(`[Dodo Redirect Sync] Payment ${paymentId} status: ${payment.status}`);
 
-    // Find the most recent succeeded payment for this user
-    const userPayment = payments.find((p: any) => {
-      return (
-        p.status === "succeeded" &&
-        p.metadata?.userId === String(userDbId)
-      );
-    });
-
-    if (userPayment) {
-      const creditsToBuy = parseInt(userPayment.metadata?.creditsToBuy || "0", 10);
-      if (creditsToBuy > 0) {
-        const result = await processPaymentSuccess(userDbId, creditsToBuy, userPayment.payment_id);
-        return result;
+        if (payment.status === "succeeded") {
+          const creditsToBuy = parseInt(payment.metadata?.creditsToBuy || "0", 10);
+          if (creditsToBuy > 0) {
+            const result = await processPaymentSuccess(userDbId, creditsToBuy, payment.payment_id || paymentId);
+            return result;
+          }
+        } else {
+          return { success: false, error: `Payment status is ${payment.status}` };
+        }
+      } else {
+        const errText = await res.text();
+        console.error(`[Dodo Redirect Sync] Failed to fetch payment ${paymentId}: ${res.status}`, errText);
       }
     }
 
-    // Fallback: fetch current credits
+    // 2. Fallback: fetch current credits from Supabase
     const { data: user } = await (supabaseAdmin as any)
       .from("users")
       .select("credits")
