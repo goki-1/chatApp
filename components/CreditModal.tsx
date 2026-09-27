@@ -267,8 +267,12 @@ export function CreditModal({
                 <>
                   <div className="flex items-center gap-2">
                     <span className="text-base font-bold text-stone-950 dark:text-white group-hover:text-[#8f6d3d] dark:group-hover:text-[#c4a06d] transition-colors">
-                      Pay with any UPI / QR app
+                      Pay with UPI / QR app
                     </span>
+                    <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none">
+                      <polygon points="8.75,3 14.75,12 3.25,21" fill="#F47920" />
+                      <polygon points="14.75,3 20.75,12 9.25,21 5.75,21 17.25,12 11.25,3" fill="#00b074" />
+                    </svg>
                   </div>
 
                   {/* Payment App Badges with Icons */}
@@ -285,7 +289,7 @@ export function CreditModal({
                     </div>
 
                     {/* PhonePe */}
-                    <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#5f259f]/10 border border-[#5f259f]/20">
+                    <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#5f259f]/10 border border-[#5f959f]/20">
                       <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none">
                         <rect width="24" height="24" rx="6" fill="#5F259F" />
                         <path d="M14.8 6.5h-5.2c-.4 0-.7.3-.7.7v10.6c0 .4.3.7.7.7h2.2c.4 0 .7-.3.7-.7v-3.3h2.3c2.6 0 4.2-1.4 4.2-4 0-2.6-1.6-4-4.2-4Zm-.2 5.5h-2.1V9.3h2.1c1.2 0 1.9.6 1.9 1.4 0 .8-.7 1.3-1.9 1.3Z" fill="#FFF" />
@@ -294,17 +298,17 @@ export function CreditModal({
                     </div>
 
                     {/* Paytm */}
-                    <div className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#002e6e]/10 border border-[#002e6e]/20">
+                    <div className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#002e6e]/10 border border-[#009fff]/20">
                       <span className="text-[11px] font-bold text-[#002e6e] dark:text-[#00b9f5]">Paytm</span>
                     </div>
 
                     {/* BHIM UPI */}
                     <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#00b074]/10 border border-[#00b074]/25">
                       <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none">
-                        <path d="M14.5 4L9.5 20" stroke="#00b074" strokeWidth="3" strokeLinecap="round" />
-                        <path d="M5 10l4.5 10 4.5-10" stroke="#F47920" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+                        <polygon points="8.75,3 14.75,12 3.25,21" fill="#F47920" />
+                        <polygon points="14.75,3 20.75,12 9.25,21 5.75,21 17.25,12 11.25,3" fill="#00b074" />
                       </svg>
-                      <span className="text-[11px] font-semibold text-[#008f5d] dark:text-[#00c985]">UPI / QR</span>
+                      <span className="text-[11px] font-semibold text-[#008f5d] dark:text-[#00c985]">UPI</span>
                     </div>
                   </div>
                 </>
