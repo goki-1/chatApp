@@ -111,11 +111,22 @@ export default function Home() {
         syncPayment();
       } else if (paymentStatus === "cancelled") {
         setPaymentNotice("Payment was cancelled.");
+        setIsCheckoutLoading(false);
+        setIsCreditModalOpen(false);
         const newUrl = window.location.pathname;
         window.history.replaceState({}, "", newUrl);
       }
     }
   }, [authLoaded, userId, userLoaded, user, isGuest, guestClerkId, userDbId]);
+
+  // Reset checkout loading state if user returns from Stripe/Dodo via browser back button (bfcache)
+  useEffect(() => {
+    const handlePageShow = () => {
+      setIsCheckoutLoading(false);
+    };
+    window.addEventListener("pageshow", handlePageShow);
+    return () => window.removeEventListener("pageshow", handlePageShow);
+  }, []);
 
   const handleCheckout = async (creditsTier: 50 | 100 | 200, currencyCode: string = "usd") => {
     if (!userDbId) return;
@@ -374,7 +385,10 @@ export default function Home() {
 
       <CreditModal
         isOpen={isCreditModalOpen}
-        onClose={() => setIsCreditModalOpen(false)}
+        onClose={() => {
+          setIsCreditModalOpen(false);
+          setIsCheckoutLoading(false);
+        }}
         userDbId={userDbId}
         onCheckout={handleCheckout}
         onDodoCheckout={handleDodoCheckout}

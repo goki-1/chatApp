@@ -26,19 +26,8 @@ export function CreditModal({
   const [paymentProvider, setPaymentProvider] = useState<"dodo" | "stripe" | null>(null);
 
   useEffect(() => {
-    // Detect Indian timezone/locale vs global USD with support for ?country=IN override
+    // Detect Indian timezone/locale vs global USD
     try {
-      const urlParams = new URLSearchParams(window.location.search);
-      const forcedCountry = urlParams.get("country")?.toUpperCase();
-      if (forcedCountry === "IN" || forcedCountry === "INDIA") {
-        setCurrencyCode("INR");
-        return;
-      }
-      if (forcedCountry && forcedCountry !== "IN") {
-        setCurrencyCode("USD");
-        return;
-      }
-
       const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
       if (
         timeZone.includes("Calcutta") ||
@@ -64,6 +53,38 @@ export function CreditModal({
       setSelectedTier(100);
     }
   }, [isIndia, selectedTier]);
+
+  // Reset paymentProvider on close or when restored from bfcache
+  useEffect(() => {
+    if (!isOpen) {
+      setPaymentProvider(null);
+    }
+  }, [isOpen]);
+
+  useEffect(() => {
+    const handlePageShow = () => {
+      setPaymentProvider(null);
+    };
+    window.addEventListener("pageshow", handlePageShow);
+    return () => window.removeEventListener("pageshow", handlePageShow);
+  }, []);
+
+  const handleModalClose = () => {
+    setPaymentProvider(null);
+    onClose();
+  };
+
+  // Close on Escape key
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        handleModalClose();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -129,12 +150,18 @@ export function CreditModal({
   const tiers = isIndia ? indiaTiers : internationalTiers;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/65 backdrop-blur-sm animate-fadeIn">
-      <div className="relative w-full max-w-lg bg-white dark:bg-[#121212] border border-stone-200 dark:border-stone-800 rounded-3xl p-6 sm:p-8 shadow-2xl transition-all max-h-[92vh] overflow-y-auto">
+    <div
+      onClick={handleModalClose}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/65 backdrop-blur-sm animate-fadeIn"
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="relative w-full max-w-lg bg-white dark:bg-[#121212] border border-stone-200 dark:border-stone-800 rounded-3xl p-6 sm:p-8 shadow-2xl transition-all max-h-[92vh] overflow-y-auto"
+      >
         {/* Close Button */}
         <button
-          onClick={onClose}
-          disabled={isActionLoading}
+          type="button"
+          onClick={handleModalClose}
           aria-label="Close modal"
           className="absolute top-4 right-4 p-2 text-stone-400 hover:text-stone-700 dark:hover:text-stone-200 rounded-full transition-colors cursor-pointer"
         >
