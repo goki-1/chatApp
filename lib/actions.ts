@@ -571,9 +571,12 @@ export async function createPaymentIntentAction(
   }
 }
 
+// Cache processed payment IDs to prevent duplicate crediting between redirect and webhook
+const processedPaymentIds = new Set<string>();
+
 /**
  * Safely processes a successful payment and adds credits to the user in Supabase.
- * Idempotent: checks token1 to avoid double crediting.
+ * Idempotent: checks processedPaymentIds to avoid double crediting.
  */
 export async function processPaymentSuccess(
   userDbId: number,
@@ -581,37 +584,43 @@ export async function processPaymentSuccess(
   paymentId: string
 ) {
   try {
+    if (processedPaymentIds.has(paymentId)) {
+      console.log(`Payment ${paymentId} already processed for user ${userDbId}`);
+      const { data: user } = await (supabaseAdmin as any)
+        .from("users")
+        .select("credits")
+        .eq("id", userDbId)
+        .single();
+      return { success: true, credits: user?.credits ?? 0, alreadyProcessed: true };
+    }
+
+    processedPaymentIds.add(paymentId);
+
     const { data: user, error: userError } = await (supabaseAdmin as any)
       .from("users")
-      .select("credits, token1")
+      .select("credits")
       .eq("id", userDbId)
       .single();
 
     if (userError || !user) {
+      processedPaymentIds.delete(paymentId);
       console.error(`Error fetching user ${userDbId}:`, userError);
       return { success: false, error: userError?.message || "User not found" };
     }
 
-    const processedPayments = (user.token1 || "").split(",");
-    if (processedPayments.includes(paymentId)) {
-      console.log(`Payment ${paymentId} already processed for user ${userDbId}`);
-      return { success: true, credits: user.credits, alreadyProcessed: true };
-    }
-
     const currentCredits = user.credits ?? 0;
     const newCredits = currentCredits + creditsToBuy;
-    const updatedToken1 = user.token1 ? `${user.token1},${paymentId}` : paymentId;
 
     const { error: updateError } = await (supabaseAdmin as any)
       .from("users")
       .update({
         credits: newCredits,
-        token1: updatedToken1,
         updated_at: new Date().toISOString(),
       })
       .eq("id", userDbId);
 
     if (updateError) {
+      processedPaymentIds.delete(paymentId);
       console.error(`Error updating credits for user ${userDbId}:`, updateError);
       return { success: false, error: updateError.message };
     }
@@ -619,6 +628,7 @@ export async function processPaymentSuccess(
     console.log(`[Payment] Added ${creditsToBuy} credits to user ${userDbId}. New balance: ${newCredits}`);
     return { success: true, credits: newCredits, alreadyProcessed: false };
   } catch (err: any) {
+    processedPaymentIds.delete(paymentId);
     console.error("Error in processPaymentSuccess:", err);
     return { success: false, error: err.message || String(err) };
   }
@@ -656,11 +666,16 @@ export async function syncDodoPaymentOnRedirect(
         console.log(`[Dodo Redirect Sync] Payment ${paymentId} status: ${payment.status}`);
 
         if (payment.status === "succeeded") {
-          const creditsToBuy = parseInt(payment.metadata?.creditsToBuy || "0", 10);
-          if (creditsToBuy > 0) {
-            const result = await processPaymentSuccess(userDbId, creditsToBuy, payment.payment_id || paymentId);
-            return result;
+          let creditsToBuy = parseInt(payment.metadata?.creditsToBuy || "0", 10);
+          if (isNaN(creditsToBuy) || creditsToBuy <= 0) {
+            const amt = payment.total_amount || payment.amount || 0;
+            if (amt === 19900 || amt === 199) creditsToBuy = 50;
+            else if (amt === 29900 || amt === 299) creditsToBuy = 100;
+            else if (amt === 49900 || amt === 499) creditsToBuy = 200;
+            else creditsToBuy = 50;
           }
+          const result = await processPaymentSuccess(userDbId, creditsToBuy, payment.payment_id || paymentId);
+          return result;
         } else {
           return { success: false, error: `Payment status is ${payment.status}` };
         }
